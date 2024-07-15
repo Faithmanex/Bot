@@ -58,7 +58,8 @@ try:
     if single_symbol:
         # Example: Selecting EURUSD based on some condition or input
         # selected_symbols = ["EURNOK", "EURNZD", "GBPNOK", "EURHKD", "EURGBP"] # Replace with your logic to determine the symbol dynamically
-        selected_symbols = ["Volatility 10 Index"]  # Replace with your logic to determine the symbol dynamically
+        selected_symbols = ['Volatility 75 (1s) Index', 'Volatility 10 Index', 'Drift Switch Index 20', 'Volatility 50 (1s) Index', 'Drift Switch Index 30', 'Volatility 100 Index']
+  # Replace with your logic to determine the symbol dynamically
         symbols = selected_symbols
     else:
         symbols = determine_symbol()

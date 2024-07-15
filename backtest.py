@@ -53,7 +53,7 @@ def get_historical_data(symbol, timeframe, timeframe_name, start_time, end_time)
     mt5.shutdown()
 
 def prep_data(symbol, timeframe_name, visualize=False):
-    print(f"Prep Data")
+    print(f"Preparing Data...")
     filename = os.path.join(history_data_dir, f"{symbol}_data_{timeframe_name}.csv")
     df = pd.read_csv(filename)
     df["time"] = pd.to_datetime(df["time"])
@@ -67,7 +67,7 @@ def prep_data(symbol, timeframe_name, visualize=False):
         return ohlcv_data
 
 def clean_data(df, symbol, visualize=False):
-    print(f"Clean Data")
+    print(f"Cleaning Data...")
     polyorder = settings[symbol]["polyorder"]
     window_length = settings[symbol]["window_length"]
     smoothed_close = savgol_filter(df["Close"], window_length, polyorder)
@@ -82,7 +82,7 @@ def clean_data(df, symbol, visualize=False):
         plt.show()
 
 def detect_pivot_points(df, symbol, visualize=False):
-    print(f"Detect Pivot")
+    print(f"Detecting Pivots...")
     order = settings[symbol]["order"]
     print(order)
     highs = argrelextrema(df["smoothed_close"].to_numpy(), np.greater, mode="wrap", order=order)
@@ -157,7 +157,7 @@ def calculate_max_daily_drawdown(balance_df):
     return max_daily_drawdown, daily_drawdown.idxmax()
 
 def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
-    print(f"Backtest")
+    print(f"Running Backtest...😁")
 
     live_trading = False
     if live_trading:
@@ -327,7 +327,6 @@ def main():
                 clean_data(df, symbol)
                 detect_pivot_points(df, symbol)
                 # calculate_supertrend(df, period=5, multiplier=3)
-                print(df)
 
             # Create a thread for the combined operations
             thread_process_data = threading.Thread(target=process_data_wrapper)
