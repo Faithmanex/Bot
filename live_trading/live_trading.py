@@ -7,6 +7,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import os
 import time
+import json
 
 from strategy import Strategy  # Assuming this is your custom strategy module
 import trendet
@@ -16,11 +17,9 @@ import trading_pairs
 history_data_dir = "history_data"
 backtest_summary_dir = "backtest_summary"
 order_db = "sent_orders.csv"
-symbols = trading_pairs.symbols
 timeframes = {
     "M5": mt5.TIMEFRAME_M5,
 }
-
 start_time = pd.to_datetime("2024-01-06 00:00:00")
 end_time = datetime.now().strftime("%Y-%m-%d %H:%M:00")
 end_time = pd.to_datetime(end_time)
@@ -28,6 +27,21 @@ end_time = pd.to_datetime(end_time)
 # Ensure directories exist
 os.makedirs(history_data_dir, exist_ok=True)
 os.makedirs(backtest_summary_dir, exist_ok=True)
+
+# Default settings
+default_settings = {
+    "window_length": 15,
+    "polyorder": 8,
+    "order": 3
+}
+
+def get_symbol_settings(symbol):
+    try:
+        with open('settings.json', 'r') as f:
+            settings = json.load(f)
+            return settings.get(symbol, default_settings)
+    except FileNotFoundError:
+        return default_settings
 
 def initialize_mt5():
     if not mt5.initialize():
@@ -82,9 +96,11 @@ def prep_data(symbol, timeframe_name, visualize=False):
     else:
         return ohlcv_data
 
-def clean_data(df, visualize=False):
-    window_length = 15
-    polyorder = 8
+def clean_data(df, symbol, visualize=False):
+    settings = get_symbol_settings(symbol)
+    window_length = settings["window_length"]
+    polyorder = settings["polyorder"]
+
     smoothed_close = savgol_filter(df["Close"], window_length, polyorder)
     df["smoothed_close"] = smoothed_close
 
@@ -96,7 +112,9 @@ def clean_data(df, visualize=False):
         plt.show()
 
 def detect_pivot_points(df, symbol, visualize=False):
-    order = 3
+    settings = get_symbol_settings(symbol)
+    order = settings["order"]
+
     highs = argrelextrema(df["smoothed_close"].to_numpy(), np.greater, mode="wrap", order=order)
     lows = argrelextrema(df["smoothed_close"].to_numpy(), np.less, mode="wrap", order=order)
 
@@ -222,7 +240,7 @@ def main():
     summary_results = []
     strategies = ["AMSstrategy"]
 
-    for symbol in symbols:
+    for symbol in trading_pairs.symbols:
         for timeframe_name, timeframe in timeframes.items():
             print(f"Running live trading for {symbol} on {timeframe_name} timeframe...")
 
@@ -230,7 +248,7 @@ def main():
             while True:
                 update_historical_data(symbol, timeframe, timeframe_name)
                 df = prep_data(symbol, timeframe_name, visualize=False)
-                clean_data(df)
+                clean_data(df, symbol)
                 detect_pivot_points(df, symbol)
                 
                 for strategy_name in strategies:

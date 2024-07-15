@@ -5,7 +5,7 @@
       "order": 10
     },
     "Volatility 10 Index": {
-      "polyorder": 10,
+      "polyorder": 9,
       "window_length": 17,
       "order": 3
     }
