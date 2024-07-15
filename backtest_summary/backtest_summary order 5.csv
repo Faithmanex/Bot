@@ -1,2 +1,2 @@
 Symbol,Timeframe,Strategy,Wins,Losses,Neither,Consecutive SL,Final Balance,Win Rate,Max Drawdown Amount,Max Drawdown Percentage,Max Daily Drawdown,Worst Day
-Volatility 10 Index,M5,AMSstrategy,32,88,9,8,13600,26.666666666666668,450,3.91304347826087,4.545454545454546,2024-03-07
+Drift Switch Index 20,M5,AMSstrategy,17,43,7,7,12100,28.333333333333332,350,3.3816425120772946,2.100840336134454,2024-07-06

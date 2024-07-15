@@ -9,9 +9,16 @@ from datetime import datetime, timedelta
 import os
 import pandas_ta as ta
 import threading
-
 import trendet
 import trading_pairs
+import json
+
+def load_settings(settings_file="settings.json"):
+    with open(settings_file, "r") as file:
+        settings = json.load(file)
+    return settings
+
+settings = load_settings()
 
 # Constants
 history_data_dir = "history_data"
@@ -59,10 +66,10 @@ def prep_data(symbol, timeframe_name, visualize=False):
     else:
         return ohlcv_data
 
-def clean_data(df, visualize=False):
+def clean_data(df, symbol, visualize=False):
     print(f"Clean Data")
-    window_length = 17
-    polyorder = 9
+    polyorder = settings[symbol]["polyorder"]
+    window_length = settings[symbol]["window_length"]
     smoothed_close = savgol_filter(df["Close"], window_length, polyorder)
     df["smoothed_close"] = smoothed_close
     print(f'window length = {window_length}')
@@ -76,7 +83,8 @@ def clean_data(df, visualize=False):
 
 def detect_pivot_points(df, symbol, visualize=False):
     print(f"Detect Pivot")
-    order = 5
+    order = settings[symbol]["order"]
+    print(order)
     highs = argrelextrema(df["smoothed_close"].to_numpy(), np.greater, mode="wrap", order=order)
     lows = argrelextrema(df["smoothed_close"].to_numpy(), np.less, mode="wrap", order=order)
 
@@ -90,6 +98,7 @@ def detect_pivot_points(df, symbol, visualize=False):
             mpf.make_addplot(df["Is_Low"], scatter=True, markersize=30, marker="v", color="r")
         ]
         mpf.plot(df, type="candle", addplot=apd, style="charles", title=f"{symbol} 1 Hour")
+
 
 def calculate_supertrend(df, period=5, multiplier=3):
     """
@@ -150,7 +159,7 @@ def calculate_max_daily_drawdown(balance_df):
 def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
     print(f"Backtest")
 
-    live_trading = True
+    live_trading = False
     if live_trading:
         if not mt5.initialize():
             print("initialize() failed")
@@ -315,7 +324,7 @@ def main():
                 global df  # Declare 'df' as global to access it inside the function
                 get_historical_data(symbol, timeframe, timeframe_name, start_time, end_time)
                 df = prep_data(symbol, timeframe_name, visualize=False)
-                clean_data(df)
+                clean_data(df, symbol)
                 detect_pivot_points(df, symbol)
                 # calculate_supertrend(df, period=5, multiplier=3)
                 print(df)
@@ -383,7 +392,7 @@ def main():
 
     plot_balance_graph(backtest_results_df)
         # Uncomment to plot individual trades
-    for trade in plot_df.itertuples():
-        plot(trade, df, symbol)
+    # for trade in plot_df.itertuples():
+    #     plot(trade, df, symbol)
 if __name__ == "__main__":
     main()

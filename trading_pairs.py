@@ -34,8 +34,7 @@ synthetic_pairs = [
     "Jump 75 Index", "Jump 100 Index", "Drift Switch Index 10", "Drift Switch Index 20", 
     "Drift Switch Index 30", "DEX 600 UP Index", "DEX 900 UP Index", "DEX 1500 UP Index", 
     "DEX 600 DOWN Index", "DEX 900 DOWN Index", "DEX 1500 DOWN Index", 
-    "Step 100 Index", "Step 200 Index", "Step 500 Index", "Range Break 100 Index", 
-    "Range Break 200 Index"
+    "Step Index", "Step 200 Index", "Step 500 Index"
 ]
 
 # Function to determine the single symbol based on conditions or user input
@@ -59,7 +58,7 @@ try:
     if single_symbol:
         # Example: Selecting EURUSD based on some condition or input
         # selected_symbols = ["EURNOK", "EURNZD", "GBPNOK", "EURHKD", "EURGBP"] # Replace with your logic to determine the symbol dynamically
-        selected_symbols = ["Drift Switch Index 20"]  # Replace with your logic to determine the symbol dynamically
+        selected_symbols = ["Volatility 10 Index"]  # Replace with your logic to determine the symbol dynamically
         symbols = selected_symbols
     else:
         symbols = determine_symbol()
