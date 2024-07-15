@@ -2,7 +2,7 @@
     "Volatility 75 (1s) Index": {
       "polyorder": 9,
       "window_length": 17,
-      "order": 10
+      "order": 8
     },
 
     "Volatility 10 Index": {
