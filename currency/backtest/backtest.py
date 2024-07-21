@@ -43,7 +43,7 @@ timeframes = {
     "M5": mt5.TIMEFRAME_M5,
 }
 start_time = pd.to_datetime("2024-01-01 00:00:00")
-end_time = pd.to_datetime("2024-07-20 23:00:00")
+end_time = pd.to_datetime("2024-07-21 23:00:00")
 
 # Ensure directories exist
 os.makedirs(history_data_dir, exist_ok=True)
@@ -360,8 +360,8 @@ def main():
                 strategy = Strategy(df)
                 plot_df = getattr(strategy, strategy_name)(RR=5)
 
-                initial_balance = 500
-                risk_amount = 15
+                initial_balance = 10000
+                risk_amount = 50
                 risk_type = "fixed"
                 backtest_results_df, wins, losses, neither, max_drawdown_amount, max_drawdown_percentage, max_daily_drawdown, worst_day = backtest(
                     df, plot_df, RR=5, initial_balance=initial_balance, risk_amount=risk_amount, risk_type=risk_type, symbol=symbol
