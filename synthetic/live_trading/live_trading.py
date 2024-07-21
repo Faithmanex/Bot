@@ -238,7 +238,7 @@ def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
 
 def analyze_symbol(symbol):
     summary_results = []
-    strategies = ["AMSstrategy"]
+    strategies = ["Noir"]
 
     for timeframe_name, timeframe in timeframes.items():
         print(f"Running live trading for {symbol} on {timeframe_name} timeframe...")

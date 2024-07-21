@@ -1,0 +1,5 @@
+Symbol,Timeframe,Strategy,Wins,Losses,Neither,Consecutive SL,Final Balance,Win Rate
+USDJPY,M1,SMSstrategy,9,72,1,23,1,11.11111111111111
+EURJPY,M1,SMSstrategy,8,97,1,26,1,7.6190476190476195
+AUDJPY,M1,SMSstrategy,5,84,0,50,1,5.617977528089887
+GBPJPY,M1,SMSstrategy,7,95,0,30,1,6.862745098039216

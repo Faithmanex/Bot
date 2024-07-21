@@ -59,7 +59,7 @@ class Strategy:
 
 
 
-    def AMSstrategy(self, RR):
+    def Noir(self, RR):
         # self.new_df['SMA'] = ta.ema(self.new_df['Close'], window=5)  # Adjust the window size as needed
         # self.new_df['ATR'] = ta.atr(self.new_df['High'], self.new_df['Low'], self.new_df['Close'], window=14)  # Adjust the window size as needed
         # self.new_df = calculate_supertrend(self.new_df)  # Calculate SuperTrend

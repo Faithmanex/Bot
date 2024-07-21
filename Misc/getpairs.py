@@ -7,6 +7,8 @@ if not mt5.initialize():
 
 # Get all available symbols
 all_symbols = mt5.symbols_get()
+for symbol in all_symbols:
+    print(symbol.name)
 
 # List of minor forex pairs (excluding major and exotic pairs)
 minor_pairs = [

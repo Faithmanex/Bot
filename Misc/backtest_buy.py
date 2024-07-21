@@ -53,8 +53,8 @@ def prepData(symbol, timeframe_name, visualize=False):
         return ohlcv_data
 
 def cleanData(df, visualize=False):
-    window_length = 15
-    polyorder = 8
+    window_length = 18
+    polyorder = 9
     smoothed_close = savgol_filter(df["Close"], window_length, polyorder)
     df["smoothed_close"] = smoothed_close
 
@@ -66,7 +66,7 @@ def cleanData(df, visualize=False):
         plt.show()
 
 def detectPivotPoints(df, visualize=False):
-    order = 5
+    order = 3
     highs = argrelextrema(df["smoothed_close"].to_numpy(), np.greater, mode="wrap", order=order)
     lows = argrelextrema(df["smoothed_close"].to_numpy(), np.less, mode="wrap", order=order)
 
