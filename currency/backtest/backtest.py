@@ -42,8 +42,8 @@ symbols = trading_pairs.symbols
 timeframes = {
     "M5": mt5.TIMEFRAME_M5,
 }
-start_time = pd.to_datetime("2024-01-01 00:00:00")
-end_time = pd.to_datetime("2024-07-21 23:00:00")
+start_time = pd.to_datetime("2024-07-01 00:00:00")
+end_time = pd.to_datetime("2024-07-23 23:00:00")
 
 # Ensure directories exist
 os.makedirs(history_data_dir, exist_ok=True)
@@ -181,7 +181,7 @@ def calculate_max_daily_drawdown(balance_df):
 def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
     print(f"Running Backtest...😁")
 
-    live_trading = False
+    live_trading = True
     print(f'Live trading: {live_trading}')
     if live_trading:
         if not mt5.initialize():
@@ -413,7 +413,7 @@ def main():
     combined_backtest_df.to_csv(os.path.join(backtest_summary_dir, "all_backtest_results.csv"), index=False)  # Save to CSV
 
     summary_df = pd.DataFrame(summary_results)
-    # print(summary_df)
+    print(summary_df)
     summary_df.to_csv(os.path.join(backtest_summary_dir, "backtest_summary.csv"), index=False)
 
     # Uncomment to plot individual trades

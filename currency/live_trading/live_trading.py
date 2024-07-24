@@ -17,12 +17,12 @@ import trading_pairs
 # Constants
 history_data_dir = "history_data"
 backtest_summary_dir = "backtest_summary"
-order_db = "sent_orders.csv"
+order_db = "sent_limits.csv"
 timeframes = {
     "M5": mt5.TIMEFRAME_M5,
 }
-start_time = pd.to_datetime("2024-01-01 00:00:00")
-end_time = pd.to_datetime("2024-07-16 23:00:00")
+start_time = pd.to_datetime("2024-07-01 00:00:00")
+end_time = datetime.now()
 
 # Ensure directories exist
 os.makedirs(history_data_dir, exist_ok=True)
@@ -42,6 +42,9 @@ def get_symbol_settings(symbol):
             return settings.get(symbol, default_settings)
     except FileNotFoundError:
         return default_settings
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON for symbol {symbol}: {e}")
+        return default_settings
 
 def initialize_mt5():
     if not mt5.initialize():
@@ -52,105 +55,138 @@ def shutdown_mt5():
     mt5.shutdown()
 
 def get_historical_data(symbol, timeframe, timeframe_name, start_time, end_time):
-    initialize_mt5()
-    rates = mt5.copy_rates_range(symbol, timeframe, start_time, end_time)
+    try:
+        end_time = datetime.now()
+        rates = mt5.copy_rates_range(symbol, timeframe, start_time, end_time)
 
-    if rates is None:
-        print("No data retrieved, error code =", mt5.last_error())
-        shutdown_mt5()
-        return None
+        if rates is None:
+            print(f"No data retrieved for {symbol}, error code =", mt5.last_error())
+            return None
 
-    df = pd.DataFrame(rates)
-    df["time"] = pd.to_datetime(df["time"], unit="s")
-    filename = os.path.join(history_data_dir, f"{symbol}_data_{timeframe_name}.csv")
-    df.to_csv(filename, index=False)
-    shutdown_mt5()
-
-def update_historical_data(symbol, timeframe, timeframe_name):
-    initialize_mt5()
-    latest_time = pd.to_datetime(mt5.copy_rates_from_pos(symbol, timeframe, 0, 1)[0][0], unit='s')
-    new_end_time = latest_time - timedelta(minutes=1)
-    rates = mt5.copy_rates_range(symbol, timeframe, latest_time, new_end_time)
-
-    if rates is not None:
         df = pd.DataFrame(rates)
         df["time"] = pd.to_datetime(df["time"], unit="s")
         filename = os.path.join(history_data_dir, f"{symbol}_data_{timeframe_name}.csv")
-        if os.path.exists(filename):
-            df.to_csv(filename, mode='a', header=False, index=False)
-        else:
-            df.to_csv(filename, index=False)
-    shutdown_mt5()
+        df.to_csv(filename, index=False)
+    except Exception as e:
+        print(f"Error getting historical data for {symbol}: {e}")
+
+def update_historical_data(symbol, timeframe, timeframe_name):
+    try:
+        initialize_mt5()
+        latest_time = pd.to_datetime(mt5.copy_rates_from_pos(symbol, timeframe, 0, 1)[0][0], unit='s')
+        new_end_time = latest_time - timedelta(minutes=1)
+        rates = mt5.copy_rates_range(symbol, timeframe, latest_time, new_end_time)
+
+        if rates is not None:
+            df = pd.DataFrame(rates)
+            df["time"] = pd.to_datetime(df["time"], unit="s")
+            filename = os.path.join(history_data_dir, f"{symbol}_data_{timeframe_name}.csv")
+            if os.path.exists(filename):
+                df.to_csv(filename, mode='a', header=False, index=False)
+            else:
+                df.to_csv(filename, index=False)
+    except Exception as e:
+        print(f"Error updating historical data for {symbol}: {e}")
 
 def prep_data(symbol, timeframe_name, visualize=False):
-    filename = os.path.join(history_data_dir, f"{symbol}_data_{timeframe_name}.csv")
-    df = pd.read_csv(filename)
-    df["time"] = pd.to_datetime(df["time"])
-    df.set_index("time", inplace=True)
-    ohlcv_data = df[["open", "high", "low", "close", "tick_volume"]]
-    ohlcv_data.columns = ["Open", "High", "Low", "Close", "Volume"]
+    try:
+        filename = os.path.join(history_data_dir, f"{symbol}_data_{timeframe_name}.csv")
+        df = pd.read_csv(filename)
+        df["time"] = pd.to_datetime(df["time"])
+        df.set_index("time", inplace=True)
+        ohlcv_data = df[["open", "high", "low", "close", "tick_volume"]]
+        ohlcv_data.columns = ["Open", "High", "Low", "Close", "Volume"]
 
-    if visualize:
-        mpf.plot(ohlcv_data, type="candle", style="line", title=f"{symbol} {timeframe_name}", volume=True)
-        return ohlcv_data
-    else:
-        return ohlcv_data
+        if visualize:
+            mpf.plot(ohlcv_data, type="candle", style="line", title=f"{symbol} {timeframe_name}", volume=True)
+            return ohlcv_data
+        else:
+            return ohlcv_data
+    except FileNotFoundError as e:
+        print(f"File not found for {symbol}: {e}")
+    except Exception as e:
+        print(f"Error preparing data for {symbol}: {e}")
 
 def clean_data(df, symbol, visualize=False):
-    settings = get_symbol_settings(symbol)
-    window_length = settings["window_length"]
-    polyorder = settings["polyorder"]
+    try:
+        settings = get_symbol_settings(symbol)
+        window_length = settings["window_length"]
+        polyorder = settings["polyorder"]
 
-    smoothed_close = savgol_filter(df["Close"], window_length, polyorder)
-    df["smoothed_close"] = smoothed_close
+        smoothed_close = savgol_filter(df["Close"], window_length, polyorder)
+        df["smoothed_close"] = smoothed_close
 
-    if visualize:
-        plt.figure(figsize=(10, 5))
-        plt.plot(df.index, df["Close"], label="Close Price")
-        plt.plot(df.index, df["smoothed_close"], label="Smoothed Close Price")
-        plt.legend()
-        plt.show()
+        if visualize:
+            plt.figure(figsize=(10, 5))
+            plt.plot(df.index, df["Close"], label="Close Price")
+            plt.plot(df.index, df["smoothed_close"], label="Smoothed Close Price")
+            plt.legend()
+            plt.show()
+    except Exception as e:
+        print(f"Error cleaning data for {symbol}: {e}")
 
 def detect_pivot_points(df, symbol, visualize=False):
-    settings = get_symbol_settings(symbol)
-    order = settings["order"]
+    try:
+        settings = get_symbol_settings(symbol)
+        order = settings["order"]
 
-    highs = argrelextrema(df["smoothed_close"].to_numpy(), np.greater, mode="wrap", order=order)
-    lows = argrelextrema(df["smoothed_close"].to_numpy(), np.less, mode="wrap", order=order)
+        highs = argrelextrema(df["smoothed_close"].to_numpy(), np.greater, mode="wrap", order=order)
+        lows = argrelextrema(df["smoothed_close"].to_numpy(), np.less, mode="wrap", order=order)
 
-    df["Is_High"] = df["High"].iloc[highs[0]]
-    df["Is_Low"] = df["Low"].iloc[lows[0]]
-    df.fillna(0)
+        df["Is_High"] = df["High"].iloc[highs[0]]
+        df["Is_Low"] = df["Low"].iloc[lows[0]]
+        df.fillna(0)
 
-    if visualize:
-        apd = [
-            mpf.make_addplot(df["Is_High"], scatter=True, markersize=30, marker="^", color="g"),
-            mpf.make_addplot(df["Is_Low"], scatter=True, markersize=30, marker="v", color="r")
-        ]
-        mpf.plot(df, type="candle", addplot=apd, style="charles", title=f"{symbol} 1 Hour")
+        if visualize:
+            apd = [
+                mpf.make_addplot(df["Is_High"], scatter=True, markersize=30, marker="^", color="g"),
+                mpf.make_addplot(df["Is_Low"], scatter=True, markersize=30, marker="v", color="r")
+            ]
+            mpf.plot(df, type="candle", addplot=apd, style="charles", title=f"{symbol} 1 Hour")
+    except Exception as e:
+        print(f"Error detecting pivot points for {symbol}: {e}")
+
+def initialize_sent_limits():
+    try:
+        if os.path.exists(order_db):
+            # Clear the file content
+            with open(order_db, 'w') as file:
+                file.write('symbol,entry_price\n')  # Write headers to the file
+        else:
+            # Create a new file with headers
+            pd.DataFrame(columns=["symbol", "entry_price"]).to_csv(order_db, index=False)
+    except Exception as e:
+        print(f"Error initializing sent limits: {e}")
 
 def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
-    live_trading = False
+    live_trading = True
 
-    if live_trading:
-        initialize_mt5()
+    try:
+        if live_trading:
+            initialize_mt5()
+            # Assuming mt5.get_account_info() returns an object with a 'balance' attribute
+            balance = mt5.account_info().balance
+        else:
+            balance = initial_balance
+    except Exception as e:
+        print(f"An error occurred while getting account balance: {e}")
+        return pd.DataFrame(), 0, 0, 0
 
     results = []
     wins = 0
     losses = 0
     neither = 0
-    balance = initial_balance
     balance_history = []
 
-    sent_orders = pd.read_csv(order_db) if os.path.exists(order_db) else pd.DataFrame(columns=["symbol", "entry_price"])
-
+    sent_limits = pd.read_csv(order_db) if os.path.exists(order_db) else pd.DataFrame(columns=["symbol", "entry_price"])
+    
     for trade in plot_df.itertuples():
         entry_price = float(trade.Entry)
         stop_loss = float(trade.Stop_Loss)
         take_profit = float(trade.Take_Profit)
         occurrence_time = trade.Occurence
-
-        if live_trading and not sent_orders[(sent_orders['symbol'] == symbol) & (sent_orders['entry_price'] == entry_price)].empty:
+        # print(sent_limits)
+        if live_trading and not sent_limits[(sent_limits['symbol'] == symbol) & (sent_limits['entry_price'].astype(float) == entry_price)].empty:
             continue
 
         price_reached_stop_loss = False
@@ -192,10 +228,19 @@ def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
         else:
             result = "Pending"
 
-        if result == "Pending":
-            neither += 1
-            if live_trading:
-                volume = 0.5
+        if result == "Pending" and live_trading:
+            from lot_size import get_lot_size  # Import the get_lot_size function from lot_size module
+
+            try:
+                volume = get_lot_size(
+                    risk_amount=risk_amount,
+                    stop_loss=stop_loss,
+                    account_currency='USD',
+                    symbol=symbol,
+                    risk_type=risk_type,
+                    account_balance=balance,
+                    entry_price = entry_price
+                )
 
                 request = {
                     "action": mt5.TRADE_ACTION_PENDING,
@@ -207,17 +252,21 @@ def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
                     "tp": take_profit,
                     "deviation": 20,
                     "magic": 0,
-                    "comment": "SMS",
+                    "comment": "Ebot",
                     "type_time": mt5.ORDER_TIME_GTC,
                     "type_filling": mt5.ORDER_FILLING_IOC,
                 }
 
                 res = mt5.order_send(request)
                 if res.retcode == mt5.TRADE_RETCODE_DONE:
-                    sent_orders = sent_orders._append({"symbol": symbol, "entry_price": entry_price}, ignore_index=True)
-                    sent_orders.to_csv(order_db, index=False)
+                    sent_limits = sent_limits._append({"symbol": symbol, "entry_price": entry_price}, ignore_index=True)
+                    print(sent_limits)
+                    sent_limits.to_csv(order_db, index=False)
+                    print(sent_limits)
                 else:
                     print(f"Failed to place order: {res.retcode}")
+            except Exception as e:
+                print(f"Error placing order for {symbol}: {e}")
 
         trade_result = {
             "Occurrence": occurrence_time,
@@ -231,9 +280,6 @@ def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
         balance_history.append({"Occurrence": occurrence_time, "Balance": balance})
         results.append(trade_result)
 
-    if live_trading:
-        shutdown_mt5()
-
     return pd.DataFrame(results), wins, losses, neither
 
 def analyze_symbol(symbol):
@@ -243,60 +289,77 @@ def analyze_symbol(symbol):
     for timeframe_name, timeframe in timeframes.items():
         print(f"Running live trading for {symbol} on {timeframe_name} timeframe...")
 
-        get_historical_data(symbol, timeframe, timeframe_name, start_time, end_time)
-        while True:
-            update_historical_data(symbol, timeframe, timeframe_name)
-            df = prep_data(symbol, timeframe_name, visualize=False)
-            clean_data(df, symbol)
-            detect_pivot_points(df, symbol)
-            
-            with ThreadPoolExecutor() as executor:
-                for strategy_name in strategies:
-                    strategy = Strategy(df)
-                    plot_df = getattr(strategy, strategy_name)(RR=5)
+        try:
+            get_historical_data(symbol, timeframe, timeframe_name, start_time, end_time)
 
-                    initial_balance = 10000
-                    risk_amount = 50
-                    risk_type = "fixed"
-                    backtest_results_df, wins, losses, neither = backtest(df, plot_df, RR=5, initial_balance=initial_balance, risk_amount=risk_amount, risk_type=risk_type, symbol=symbol)
+            while True:
+                try:
+                    get_historical_data(symbol, timeframe, timeframe_name, start_time, end_time)
+                    df = prep_data(symbol, timeframe_name, visualize=False)
+                    clean_data(df, symbol)
+                    detect_pivot_points(df, symbol)
+                    # print(df)
+                    
+                    with ThreadPoolExecutor() as executor:
+                        for strategy_name in strategies:
+                            strategy = Strategy(df)
+                            plot_df = getattr(strategy, strategy_name)(RR=5)
 
-                    final_balance = backtest_results_df.iloc[-1]["Balance"]
-                    win_rate = (wins / (wins + losses)) * 100 if (wins + losses) != 0 else 0
+                            initial_balance = mt5.account_info().balance
+                            risk_amount = 25
+                            risk_type = "fixed"
+                            backtest_results_df, wins, losses, neither = backtest(df, plot_df, RR=5, initial_balance=initial_balance, risk_amount=risk_amount, risk_type=risk_type, symbol=symbol)
 
-                    current_count = 0
-                    highest_count = 0
+                            final_balance = backtest_results_df.iloc[-1]["Balance"]
+                            win_rate = (wins / (wins + losses)) * 100 if (wins + losses) != 0 else 0
 
-                    for i in range(len(backtest_results_df)):
-                        if backtest_results_df.iloc[i]["Result"] == backtest_results_df.iloc[i - 1]["Result"] == "SL":
-                            current_count += 1
-                            if current_count > highest_count:
-                                highest_count = current_count
-                        else:
-                            current_count = 1
+                            current_count = 0
+                            highest_count = 0
 
-                    summary_results.append({
-                        "Symbol": symbol,
-                        "Timeframe": timeframe_name,
-                        "Strategy": strategy_name,
-                        "Wins": wins,
-                        "Losses": losses,
-                        "Neither": neither,
-                        "Consecutive SL": highest_count,
-                        "Final Balance": final_balance,
-                        "Win Rate": win_rate,
-                    })
+                            for i in range(1, len(backtest_results_df)):  # Fixed index start for checking previous result
+                                if backtest_results_df.iloc[i]["Result"] == backtest_results_df.iloc[i - 1]["Result"] == "SL":
+                                    current_count += 1
+                                    if current_count > highest_count:
+                                        highest_count = current_count
+                                else:
+                                    current_count = 1
 
-            summary_df = pd.DataFrame(summary_results)
-            print(summary_df)
-            summary_df.to_csv(os.path.join(backtest_summary_dir, "live_trading_summary.csv"), index=False)
+                            summary_results.append({
+                                "Symbol": symbol,
+                                "Timeframe": timeframe_name,
+                                "Strategy": strategy_name,
+                                "Wins": wins,
+                                "Losses": losses,
+                                "Neither": neither,
+                                "Consecutive SL": highest_count,
+                                "Final Balance": final_balance,
+                                "Win Rate": win_rate,
+                            })
 
-            time.sleep(5)  # Wait for 5 minutes before the next update
+                    summary_df = pd.DataFrame(summary_results)
+                    print(summary_df)
+                    summary_df.to_csv(os.path.join(backtest_summary_dir, "live_trading_summary.csv"), index=False)
+
+                except Exception as e:
+                    print(f"An error occurred while analyzing {symbol}: {e}")
+
+                time.sleep(180)  # Wait for 5 minutes before the next update
+
+        except Exception as e:
+            print(f"An error occurred while setting up analysis for {symbol}: {e}")
 
 def main():
-    symbols = trading_pairs.symbols
+    try:
+        initialize_mt5()
+        initialize_sent_limits()  # Initialize the sent limits file
+        symbols = trading_pairs.symbols
 
-    with ThreadPoolExecutor() as executor:
-        executor.map(analyze_symbol, symbols)
+        with ThreadPoolExecutor() as executor:
+            executor.map(analyze_symbol, symbols)
+    except Exception as e:
+        print(f"An error occurred in the main function: {e}")
+    finally:
+        shutdown_mt5()
 
 if __name__ == "__main__":
     main()

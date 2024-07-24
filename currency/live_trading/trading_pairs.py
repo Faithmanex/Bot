@@ -1,10 +1,10 @@
 # Set the conditions
-fx = False
+fx = True
 synthetics = False
-all_pairs = False
+all_pairs = True
 major = False
 minor = False
-single_symbol = True  # Flag for selecting a single symbol
+single_symbol = False  # Flag for selecting a single symbol
 
 # Define the forex pairs
 major_pairs = [
@@ -21,7 +21,6 @@ minor_pairs = ['AUDCAD', 'AUDCHF', 'AUDNZD', 'AUDJPY',
                'NZDJPY', 'AUDSGD', 'EURHKD', 'EURMXN', 
                'EURSGD', 'EURZAR', 'GBPSGD', 'NZDCHF', 
                'NZDSGD']
-
 
 synthetic_pairs = [
     "Volatility 10 Index", "Volatility 10 (1s) Index", "Volatility 25 Index", 
@@ -59,19 +58,10 @@ try:
         # Example: Selecting EURUSD based on some condition or input
         # selected_symbols = ["EURNOK", "EURNZD", "GBPNOK", "EURHKD", "EURGBP"] # Replace with your logic to determine the symbol dynamically
         selected_symbols = [                            
-                            'Volatility 10 Index', 
-                            'Drift Switch Index 20', 
-                            'Volatility 100 Index', 
-                            'Drift Switch Index 30', 
-                            'Volatility 75 (1s) Index', 
-                            'Volatility 50 (1s) Index',  
-                            'Volatility 25 (1s) Index', 
-                            'Crash 300 Index', 
-                            'Jump 10 Index', 
-                            'DEX 600 DOWN Index'
+                            'ADAUSD', 'DOGUSD', 'DSHUSD', 'ETCUSD', 'IOTUAD', 'XMRUSD', 'XPRUSD', 'BNBUSD'
                             ]
 
-  # Replace with your logic to determine the symbol dynamically
+        # Replace with your logic to determine the symbol dynamically
         symbols = selected_symbols
     else:
         symbols = determine_symbol()
@@ -80,3 +70,22 @@ try:
 except ValueError as e:
     print(e)
     symbols = []
+
+import MetaTrader5 as mt5
+mt5.initialize()
+broker_symbols = mt5.symbols_get()
+
+matched_symbols = []
+
+for broker_symbol in broker_symbols:
+    for my_symbol in symbols:
+        if broker_symbol.name.startswith(my_symbol):
+            matched_symbols.append(broker_symbol.name)
+        else:
+            # Check for symbols with suffixes
+            if '.' in broker_symbol.name:
+                base, suffix = broker_symbol.name.split('.', 1)
+                if base == my_symbol:
+                    matched_symbols.append(broker_symbol.name)
+
+symbols = matched_symbols

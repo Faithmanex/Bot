@@ -40,10 +40,10 @@ history_data_dir = "history_data"
 backtest_summary_dir = "backtest_summary"
 symbols = trading_pairs.symbols
 timeframes = {
-    "M5": mt5.TIMEFRAME_M5,
+    "M1": mt5.TIMEFRAME_M1,
 }
-start_time = pd.to_datetime("2024-01-01 00:00:00")
-end_time = pd.to_datetime("2024-07-20 23:00:00")
+start_time = pd.to_datetime("2001-01-01 00:00:00")
+end_time = pd.to_datetime("2024-07-22 23:00:00")
 
 # Ensure directories exist
 os.makedirs(history_data_dir, exist_ok=True)
@@ -306,17 +306,17 @@ def plot_balance_graph(backtest_results_df):
 def plot(trade, df, symbol):
     specific_datetime = trade.Occurence
     dfpl = df[specific_datetime - timedelta(days=7):specific_datetime + timedelta(days=20)]
-    # apd = [
-    #     mpf.make_addplot(dfpl["Is_High"], scatter=True, markersize=30, marker="x", color="b"),
-    #     mpf.make_addplot(dfpl["Is_Low"], scatter=True, markersize=30, marker="x", color="r"),
-    # ]
+    apd = [
+        mpf.make_addplot(dfpl["Is_High"], scatter=True, markersize=30, marker="x", color="b"),
+        mpf.make_addplot(dfpl["Is_Low"], scatter=True, markersize=30, marker="x", color="r"),
+    ]
     mpf.plot(
         dfpl,
         type="candle",
         style="nightclouds",
         title=f"{symbol}",
         warn_too_much_data=9999999999,
-        # addplot=apd,
+        addplot=apd,
         vlines=[specific_datetime],
         hlines=dict(hlines=[trade.Stop_Loss, trade.Take_Profit, trade.Entry], colors=['r','g','b'], linestyle='-'),
     )
@@ -417,8 +417,8 @@ def main():
     summary_df.to_csv(os.path.join(backtest_summary_dir, "backtest_summary.csv"), index=False)
 
     # Uncomment to plot individual trades
-    # for trade in plot_df.itertuples():
-    #     plot(trade, df, symbol)
+    for trade in plot_df.itertuples():
+        plot(trade, df, symbol)
 
 if __name__ == "__main__":
     main()
