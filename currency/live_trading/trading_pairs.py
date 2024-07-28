@@ -1,10 +1,10 @@
 # Set the conditions
-fx = True
+fx = False
 synthetics = False
 all_pairs = True
 major = False
 minor = False
-single_symbol = False  # Flag for selecting a single symbol
+single_symbol = True  # Flag for selecting a single symbol
 
 # Define the forex pairs
 major_pairs = [
@@ -58,7 +58,16 @@ try:
         # Example: Selecting EURUSD based on some condition or input
         # selected_symbols = ["EURNOK", "EURNZD", "GBPNOK", "EURHKD", "EURGBP"] # Replace with your logic to determine the symbol dynamically
         selected_symbols = [                            
-                            'ADAUSD', 'DOGUSD', 'DSHUSD', 'ETCUSD', 'IOTUAD', 'XMRUSD', 'XPRUSD', 'BNBUSD'
+                            'Volatility 10 Index', 
+                            'Drift Switch Index 20', 
+                            'Volatility 100 Index', 
+                            'Drift Switch Index 30', 
+                            'Volatility 75 (1s) Index', 
+                            'Volatility 50 (1s) Index',  
+                            'Volatility 25 (1s) Index', 
+                            'Crash 300 Index', 
+                            'Jump 10 Index', 
+                            'DEX 600 DOWN Index'
                             ]
 
         # Replace with your logic to determine the symbol dynamically

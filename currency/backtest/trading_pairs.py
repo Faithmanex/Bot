@@ -24,7 +24,7 @@ minor_pairs = ['AUDCAD', 'AUDCHF', 'AUDNZD', 'AUDJPY',
 
 
 synthetic_pairs = [
-    "Volatility 10 Index", "Volatility 10 (1s) Index", "Volatility 25 Index", 
+    "Volatility 100 Index", "Volatility 10 (1s) Index", "Volatility 25 Index", 
     "Volatility 25 (1s) Index", "Volatility 50 Index", "Volatility 50 (1s) Index", 
     "Volatility 75 Index", "Volatility 75 (1s) Index", "Volatility 100 Index", 
     "Volatility 100 (1s) Index", "Volatility 150 (1s) Index", "Volatility 200 (1s) Index", 
@@ -57,14 +57,13 @@ def determine_symbol():
 try:
     if single_symbol:
         # Example: Selecting EURUSD based on some condition or input
-        # selected_symbols = ["EURNOK", "EURNZD", "GBPNOK", "EURHKD", "EURGBP"] # Replace with your logic to determine the symbol dynamically
-        selected_symbols = [                            
-                            'Volatility 10 Index', 
-                            'Drift Switch Index 20', 
+        # selected_symbols = ["Volatility 200 (1s) Index"] # Replace with your logic to determine the symbol dynamically
+        selected_symbols = ['Volatility 50 (1s) Index',                         
                             'Volatility 100 Index', 
+                            'Drift Switch Index 20', 
+                            'Volatility 10 Index', 
                             'Drift Switch Index 30', 
                             'Volatility 75 (1s) Index', 
-                            'Volatility 50 (1s) Index',  
                             'Volatility 25 (1s) Index', 
                             'Crash 300 Index', 
                             'Jump 10 Index', 

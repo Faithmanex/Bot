@@ -13,22 +13,26 @@ import threading
 import trading_pairs
 import json
 
-def load_settings(settings_file="c:/Users/DELL XPS 9360/Documents/GitHub/Bot/currency/backtest/settings.json"):
+def load_settings(settings_file="settings.json"):
     with open(settings_file, "r") as file:
         settings = json.load(file)
     
     # Define default settings for symbols
-    default_symbol_settings = {
-        "polyorder": 6,
-        "window_length": 7,
-        "order": 5
-    }
+    default_symbol_settings = {}
+    for polyorder in range(2, 16):
+        for window_length in range(2, 16):
+            if polyorder < window_length:
+                default_symbol_settings[f"{polyorder}_{window_length}"] = {
+                    "polyorder": polyorder,
+                    "window_length": window_length,
+                    "order": 9
+                }
 
     # Ensure every symbol has settings, using defaults if necessary
     for symbol in trading_pairs.symbols:
         if symbol not in settings:
-            settings[symbol] = default_symbol_settings
-    
+            settings[symbol] = default_symbol_settings[f"2_15"]  # Using 2_15 as the default
+
     return settings
 
 
@@ -36,10 +40,9 @@ settings = load_settings()
 
 # Constants
 history_data_dir = "history_data"
-backtest_summary_dir = "/backtest_summary"
+backtest_summary_dir = "backtest_summary"
 symbols = trading_pairs.symbols
 timeframes = {
-    # "M5": mt5.TIMEFRAME_M5,
     "M5": mt5.TIMEFRAME_M5,
 }
 
@@ -163,7 +166,6 @@ def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
     if live_trading:
         if not mt5.initialize():
             print("initialize() failed")
-            mt5.shutdown()
             return
 
     balance = initial_balance
@@ -261,13 +263,19 @@ def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
 
     balance_series = pd.Series([entry['Balance'] for entry in balance_history])
     max_drawdown_amount, max_drawdown_percentage = calculate_drawdown(balance_series)
-
+    final_balance = backtest_df.iloc[-1]["Balance"]
     balance_df = pd.DataFrame(balance_history)
     max_daily_drawdown, worst_day = calculate_max_daily_drawdown(balance_df)
     print(f"Starting Balance: {initial_balance}")
     print(f"Max Drawdown Amount: {max_drawdown_amount}")
     print(f"Max Drawdown Percentage: {max_drawdown_percentage * 100:.2f}%")
     print(f"Max Daily Drawdown: {max_daily_drawdown * 100:.2f}% on {worst_day}")
+    print(f'Final Balance: {final_balance}')
+
+    print()
+    print()
+    print()
+
 
     return backtest_df, wins, losses, neither, max_drawdown_amount, max_drawdown_percentage, max_daily_drawdown, worst_day
 
@@ -283,123 +291,109 @@ def plot_balance_graph(backtest_results_df):
 def plot(trade, df, symbol):
     specific_datetime = trade.Occurence
     dfpl = df[specific_datetime - timedelta(days=7):specific_datetime + timedelta(days=20)]
-    apd = [
-        mpf.make_addplot(dfpl["Is_High"], scatter=True, markersize=30, marker="x", color="b"),
-        mpf.make_addplot(dfpl["Is_Low"], scatter=True, markersize=30, marker="x", color="r"),
-    ]
+    # apd = [
+    #     mpf.make_addplot(dfpl["Is_High"], scatter=True, markersize=30, marker="x", color="b"),
+    #     mpf.make_addplot(dfpl["Is_Low"], scatter=True, markersize=30, marker="x", color="r"),
+    # ]
     mpf.plot(
         dfpl,
         type="candle",
         style="nightclouds",
         title=f"{symbol}",
         warn_too_much_data=9999999999,
-        addplot=apd,
+        # addplot=apd,
         vlines=[specific_datetime],
         hlines=dict(hlines=[trade.Stop_Loss, trade.Take_Profit, trade.Entry], colors=['r','g','b'], linestyle='-'),
     )
 
 def main():
-    # Initialization and setup
-    if not mt5.initialize():
-        print("initialize() failed")
-        mt5.shutdown()
+    if not initialize_mt5():
         return
     
     symbols = mt5.symbols_get(group="ForexMinor")
-    if symbols is not None:
+    if symbols:
         print("Available Forex Minor Pairs:")
         for symbol in symbols:
             print(symbol.name)
 
+    all_backtest_results = []
     summary_results = []
     strategies = ["Noir"]
-    all_backtest_results = []  # Added to store backtest results of all symbols
-
 
     for symbol in trading_pairs.symbols:
         for timeframe_name, timeframe in timeframes.items():
-            print()
-            print()
-            print(f"Running backtest for {symbol} on {timeframe_name} timeframe...")
+            print(f"\nFetching historical data for {symbol} on {timeframe_name} timeframe...")
+            get_historical_data(symbol, timeframe, timeframe_name, start_time, end_time)
 
-            # Data preparation and cleaning (unchanged)
-            def process_data_wrapper():
-                global df
-                get_historical_data(symbol, timeframe, timeframe_name, start_time, end_time)
-                df = prep_data(symbol, timeframe_name, visualize=False)
-                clean_data(df, symbol)
-                detect_pivot_points(df, symbol)
+            for polyorder in range(2, 15):
+                for window_length in range(2, 20):
+                    for order in range(2, 15):
+                        if polyorder < window_length:
+                            settings[symbol] = {
+                                "polyorder": polyorder,
+                                "window_length": window_length,
+                                "order": order
+                            }
 
-            thread_process_data = threading.Thread(target=process_data_wrapper)
-            thread_process_data.start()
-            thread_process_data.join()
+                            def process_data():
+                                df = prep_data(symbol, timeframe_name, visualize=False)
+                                clean_data(df, symbol)
+                                detect_pivot_points(df, symbol)
+                                return df
 
-            for strategy_name in strategies:
-                strategy = Strategy(df)
-                plot_df = getattr(strategy, strategy_name)(RR=5)
+                            df = process_data()
 
-                initial_balance = 100
-                risk_amount = 10
-                risk_type = "fixed"
-                backtest_results_df, wins, losses, neither, max_drawdown_amount, max_drawdown_percentage, max_daily_drawdown, worst_day = backtest(
-                    df, plot_df, RR=5, initial_balance=initial_balance, risk_amount=risk_amount, risk_type=risk_type, symbol=symbol
-                )
+                            print(f"Running backtest for {symbol} on {timeframe_name} timeframe with polyorder {polyorder} and window length {window_length}...")
 
-                final_balance = backtest_results_df.iloc[-1]["Balance"]
-                if wins != 0:
-                    win_rate = (wins / (wins + losses)) * 100
-                else:
-                    win_rate = 0
+                            for strategy_name in strategies:
+                                strategy = Strategy(df)
+                                plot_df = getattr(strategy, strategy_name)(RR=5)
 
-                current_count = 0
-                highest_count = 0
+                                initial_balance = 100
+                                risk_amount = 10
+                                risk_type = "fixed"
 
-                for i in range(len(backtest_results_df)):
-                    if (
-                        backtest_results_df.iloc[i]["Result"]
-                        == backtest_results_df.iloc[i - 1]["Result"]
-                        == "SL"
-                    ):
-                        current_count += 1
-                        if current_count > highest_count:
-                            highest_count = current_count
-                    else:
-                        current_count = 1
+                                results = backtest(df, plot_df, RR=5, initial_balance=initial_balance, risk_amount=risk_amount, risk_type=risk_type, symbol=symbol)
 
-                summary_results.append({
-                    "Symbol": symbol,
-                    # "Timeframe": timeframe_name,
-                    # "Strategy": strategy_name,
-                    "Wins": wins,
-                    "Losses": losses,
-                    "Neither": neither,
-                    "Consecutive SL": highest_count,
-                    "Final Balance": final_balance,
-                    "Win Rate": win_rate,
-                    # "Max Drawdown Amount": max_drawdown_amount,
-                    # "Max Drawdown Percentage": max_drawdown_percentage * 100,
-                    # "Max Daily Drawdown": max_daily_drawdown * 100,
-                    # "Worst Day": worst_day
-                })
-                print(f"Final Balance: {final_balance}")
-                # Append the backtest results of the current symbol to the all_backtest_results list
-                backtest_results_df["Symbol"] = symbol  # Add a column to identify the symbol
-                all_backtest_results.append(backtest_results_df)  # Added to collect results
-        
-        # Uncomment this to plot balance chart
-        # plot_balance_graph(backtest_results_df)
+                                backtest_results_df, wins, losses, neither, max_drawdown_amount, max_drawdown_percentage, max_daily_drawdown, worst_day = results
 
-    # Combine all backtest results into a single DataFrame and save to CSV
-    combined_backtest_df = pd.concat(all_backtest_results)  # Combine all results
-    combined_backtest_df.to_csv(os.path.join(backtest_summary_dir, "all_backtest_results.csv"), index=False)  # Save to CSV
+                                final_balance = backtest_results_df.iloc[-1]["Balance"]
+                                win_rate = (wins / (wins + losses)) * 100 if wins != 0 else 0
+
+                                current_count = highest_count = 0
+                                for i in range(1, len(backtest_results_df)):
+                                    if backtest_results_df.iloc[i]["Result"] == backtest_results_df.iloc[i - 1]["Result"] == "SL":
+                                        current_count += 1
+                                        highest_count = max(highest_count, current_count)
+                                    else:
+                                        current_count = 1
+
+                                summary_results.append({
+                                    "Symbol": symbol,
+                                    "Wins": wins,
+                                    "Losses": losses,
+                                    "Neither": neither,
+                                    "Consecutive SL": highest_count,
+                                    "Final Balance": final_balance,
+                                    "Win Rate": win_rate,
+                                    "P": polyorder,
+                                    "W": window_length,
+                                    "O": order
+                                })
+
+                                backtest_results_df["Symbol"] = symbol
+                                all_backtest_results.append(backtest_results_df)
+                                optimization_df = pd.DataFrame(summary_results)
+                                optimization_df.to_csv(os.path.join(backtest_summary_dir, f'Opt_{symbol}_summary.csv'), index=True)
+
+            # plot_balance_graph(backtest_results_df)
+            combined_backtest_df = pd.concat(all_backtest_results)
+            combined_backtest_df.to_csv(os.path.join(backtest_summary_dir, "Combined_resuts.csv"), index=False)
 
     summary_df = pd.DataFrame(summary_results)
     print(summary_df)
-    summary_df.to_csv(os.path.join(backtest_summary_dir, "backtest_summary.csv"), index=False)
-
-    # Uncomment to plot individual trades
-    # for trade in plot_df.itertuples():
-    #     plot(trade, df, symbol)
-
+    summary_df.to_csv(os.path.join(backtest_summary_dir, "Complete_Optimization.csv"), index=False)
+    shutdown_mt5()
 if __name__ == "__main__":
-        main()
+    main()
+
