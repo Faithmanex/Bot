@@ -1,0 +1,12 @@
+{
+    "EURUSD": {
+        "polyorder": 8,
+        "window_length": 15,
+        "order": 3
+    },
+    "GBPUSD": {
+        "polyorder": 6,
+        "window_length": 7,
+        "order": 5
+    }
+}
