@@ -10,10 +10,10 @@ import time
 import json
 import threading
 
-from currency.strategy import Strategy
-import trading_pairs
-from currency.settings import load_settings, HISTORY_DATA_DIR, BACKTEST_SUMMARY_DIR, ORDER_DB
-from currency.lot_size import get_lot_size
+from .modules.strategy import Strategy
+from .modules import trading_pairs
+from .settings import load_settings, HISTORY_DATA_DIR, BACKTEST_SUMMARY_DIR, ORDER_DB
+from .modules.lot_size import get_lot_size
 
 # Load global settings
 settings = load_settings()

@@ -1,6 +1,6 @@
 import os
 import json
-from currency.trading_pairs import symbols
+from .modules.trading_pairs import symbols
 
 def get_project_root():
     """Returns the absolute path to the project's root directory."""
