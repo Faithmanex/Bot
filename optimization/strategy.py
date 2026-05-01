@@ -38,15 +38,16 @@ class Strategy:
 
         self.new_df_filtered = self.new_df[conditions]
 
-        for idx, row in self.new_df_filtered.iterrows():
-            self.occurences.append(idx)
-            block_range = row['high_shift_3'] - row['low_shift_4']
-            entry_price = row['high_shift_5']
-            self.entries.append(entry_price)
-            stop_loss = row['high_shift_5'] + (block_range * 1.1)
+        if not self.new_df_filtered.empty:
+            self.occurences.extend(self.new_df_filtered.index.tolist())
+            block_range = self.new_df_filtered['high_shift_3'] - self.new_df_filtered['low_shift_4']
+            entry_price = self.new_df_filtered['high_shift_5']
+            stop_loss = self.new_df_filtered['high_shift_5'] + (block_range * 1.1)
             take_profit = entry_price - ((stop_loss - entry_price) * RR)
-            self.stop_losses.append(stop_loss)
-            self.take_profits.append(take_profit)
+
+            self.entries.extend(entry_price.tolist())
+            self.stop_losses.extend(stop_loss.tolist())
+            self.take_profits.extend(take_profit.tolist())
 
         plot_df = pd.DataFrame({
             "Occurence": self.occurences,
@@ -78,15 +79,16 @@ class Strategy:
 
         self.new_df_filtered = self.new_df[conditions]
 
-        for idx, row in self.new_df_filtered.iterrows():
-            self.occurences.append(idx)
-            block_range = row['high_shift_3'] - row['low_shift_2']
-            entry_price = row['low_shift_2']
-            self.entries.append(entry_price)
-            stop_loss = row['high_shift_1'] + (block_range * self.fibonacci_levels[1])
+        if not self.new_df_filtered.empty:
+            self.occurences.extend(self.new_df_filtered.index.tolist())
+            block_range = self.new_df_filtered['high_shift_3'] - self.new_df_filtered['low_shift_2']
+            entry_price = self.new_df_filtered['low_shift_2']
+            stop_loss = self.new_df_filtered['high_shift_1'] + (block_range * self.fibonacci_levels[1])
             take_profit = entry_price - ((stop_loss - entry_price) * RR)
-            self.stop_losses.append(stop_loss)
-            self.take_profits.append(take_profit)
+
+            self.entries.extend(entry_price.tolist())
+            self.stop_losses.extend(stop_loss.tolist())
+            self.take_profits.extend(take_profit.tolist())
 
         plot_df = pd.DataFrame({
             "Occurence": self.occurences,
@@ -119,18 +121,22 @@ class Strategy:
 
         self.new_df_filtered = self.new_df[conditions]
 
-        for idx, row in self.new_df_filtered.iterrows():
-            lower_tolerance = row['high_shift_3'] - (row['low_shift_2'] * math.tan(0.02))
-            upper_tolerance = row['high_shift_3'] + (row['low_shift_2'] * math.tan(0.02))
-            if upper_tolerance >= row['high_shift_1'] >= lower_tolerance:
-                self.occurences.append(idx)
-                block_range = row['high_shift_3'] - row['low_shift_2']
-                entry_price = row['low_shift_2'] - block_range
-                self.entries.append(entry_price)
-                stop_loss = row['high_shift_1'] + (block_range * self.fibonacci_levels[1])
+        if not self.new_df_filtered.empty:
+            lower_tolerance = self.new_df_filtered['high_shift_3'] - (self.new_df_filtered['low_shift_2'] * math.tan(0.02))
+            upper_tolerance = self.new_df_filtered['high_shift_3'] + (self.new_df_filtered['low_shift_2'] * math.tan(0.02))
+            mask = (upper_tolerance >= self.new_df_filtered['high_shift_1']) & (self.new_df_filtered['high_shift_1'] >= lower_tolerance)
+
+            valid_df = self.new_df_filtered[mask]
+            if not valid_df.empty:
+                self.occurences.extend(valid_df.index.tolist())
+                block_range = valid_df['high_shift_3'] - valid_df['low_shift_2']
+                entry_price = valid_df['low_shift_2'] - block_range
+                stop_loss = valid_df['high_shift_1'] + (block_range * self.fibonacci_levels[1])
                 take_profit = entry_price - ((stop_loss - entry_price) * RR)
-                self.stop_losses.append(stop_loss)
-                self.take_profits.append(take_profit)
+
+                self.entries.extend(entry_price.tolist())
+                self.stop_losses.extend(stop_loss.tolist())
+                self.take_profits.extend(take_profit.tolist())
 
         plot_df = pd.DataFrame({
             "Occurence": self.occurences,
@@ -162,15 +168,16 @@ class Strategy:
 
         self.new_df_filtered = self.new_df[conditions]
 
-        for idx, row in self.new_df_filtered.iterrows():
-            self.occurences.append(idx)
-            block_range = row['high_shift_3'] - row['low_shift_2']
-            entry_price = row['low_shift_2'] - block_range
-            self.entries.append(entry_price)
-            stop_loss = row['high_shift_1'] + (block_range * self.fibonacci_levels[1])
+        if not self.new_df_filtered.empty:
+            self.occurences.extend(self.new_df_filtered.index.tolist())
+            block_range = self.new_df_filtered['high_shift_3'] - self.new_df_filtered['low_shift_2']
+            entry_price = self.new_df_filtered['low_shift_2'] - block_range
+            stop_loss = self.new_df_filtered['high_shift_1'] + (block_range * self.fibonacci_levels[1])
             take_profit = entry_price - ((stop_loss - entry_price) * RR)
-            self.stop_losses.append(stop_loss)
-            self.take_profits.append(take_profit)
+
+            self.entries.extend(entry_price.tolist())
+            self.stop_losses.extend(stop_loss.tolist())
+            self.take_profits.extend(take_profit.tolist())
 
         plot_df = pd.DataFrame({
             "Occurence": self.occurences,
