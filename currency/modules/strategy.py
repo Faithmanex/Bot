@@ -210,14 +210,13 @@ class Strategy:
         from .ml_pattern import get_all_pivot_sequences, predict_pattern_probability
         
         sequences, trigger_indices, is_buy_list = get_all_pivot_sequences(self.new_df)
+        symbol = self.symbol if self.symbol else "EURUSD"
         print(f"[INFO] Evaluating {len(sequences)} swing patterns using ML model for {symbol}...")
         
         occurences = []
         entries = []
         stop_losses = []
         take_profits = []
-
-        symbol = self.symbol if self.symbol else "EURUSD"
 
         for seq, trig_time, is_buy in zip(sequences, trigger_indices, is_buy_list):
             prob = predict_pattern_probability(symbol, seq)
