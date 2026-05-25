@@ -41,6 +41,18 @@ def get_historical_data(symbol, timeframe, timeframe_name, start, end):
         return False
     df = pd.DataFrame(rates)
     df["time"] = pd.to_datetime(df["time"], unit="s")
+    
+    # Rename columns to capitalized casing expected by strategies and backtester
+    rename_map = {
+        "open": "Open",
+        "high": "High",
+        "low": "Low",
+        "close": "Close",
+        "tick_volume": "Volume",
+        "real_volume": "Volume"
+    }
+    df.rename(columns=rename_map, inplace=True)
+    
     filename = os.path.join(HISTORY_DATA_DIR, f"{symbol}_data_{timeframe_name}.csv")
     df.to_csv(filename, index=False)
     return True
