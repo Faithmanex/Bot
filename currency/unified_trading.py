@@ -220,7 +220,7 @@ def analyze_symbol(symbol, live_trading=False, config=None):
         "M30": mt5.TIMEFRAME_M30,
         "H1": mt5.TIMEFRAME_H1,
         "H4": mt5.TIMEFRAME_H4,
-        "D1": mt5.TIMEFRAME_DAILY,
+        "D1": mt5.TIMEFRAME_D1,
     }
     timeframe = tf_map.get(timeframe_name, mt5.TIMEFRAME_M5)
 
