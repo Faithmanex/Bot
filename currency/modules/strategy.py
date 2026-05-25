@@ -1,9 +1,9 @@
 import pandas as pd
-import pandas_ta as ta
 import numpy as np
 
 class Strategy:
-    def __init__(self, dataframe):
+    def __init__(self, dataframe, symbol=None):
+        self.symbol = symbol
         self.fibonacci_levels = [0, 0.272, 0.382, 0.5, 0.618, 0.786, 1, 1.361, 1.836]
         self.new_df = dataframe.loc[dataframe["Is_High"].notna() | dataframe["Is_Low"].notna()].copy()
 
@@ -203,5 +203,53 @@ class Strategy:
         plot_df["Risk_to_Reward_Ratio"] = (plot_df["Take_Profit"] - plot_df["Entry"]) / (
             plot_df["Entry"] - plot_df["Stop_Loss"]
         )
+
+        return plot_df
+
+    def MLPattern(self, RR):
+        from .ml_pattern import get_all_pivot_sequences, predict_pattern_probability
+        
+        sequences, trigger_indices, is_buy_list = get_all_pivot_sequences(self.new_df)
+        print(f"[INFO] Evaluating {len(sequences)} swing patterns using ML model for {symbol}...")
+        
+        occurences = []
+        entries = []
+        stop_losses = []
+        take_profits = []
+
+        symbol = self.symbol if self.symbol else "EURUSD"
+
+        for seq, trig_time, is_buy in zip(sequences, trigger_indices, is_buy_list):
+            prob = predict_pattern_probability(symbol, seq)
+            if prob >= 0.58:  # Trigger on high probability predictions
+                entry_price = seq[0]["val"]
+                wave_size = abs(seq[1]["val"] - seq[2]["val"])
+                if wave_size == 0:
+                    wave_size = 1e-4
+
+                if is_buy:
+                    stop_loss = entry_price - (wave_size * 0.5)
+                    take_profit = entry_price + (entry_price - stop_loss) * RR
+                else:
+                    stop_loss = entry_price + (wave_size * 0.5)
+                    take_profit = entry_price - (stop_loss - entry_price) * RR
+
+                occurences.append(trig_time)
+                entries.append(entry_price)
+                stop_losses.append(stop_loss)
+                take_profits.append(take_profit)
+
+        plot_df = pd.DataFrame({
+            "Occurence": occurences,
+            "Entry": entries,
+            "Stop_Loss": stop_losses,
+            "Take_Profit": take_profits,
+        })
+        if not plot_df.empty:
+            plot_df["Risk_to_Reward_Ratio"] = (plot_df["Take_Profit"] - plot_df["Entry"]) / (
+                plot_df["Entry"] - plot_df["Stop_Loss"]
+            )
+        else:
+            plot_df["Risk_to_Reward_Ratio"] = pd.Series(dtype='float64')
 
         return plot_df
