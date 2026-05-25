@@ -1,6 +1,6 @@
 import pandas as pd
 import pandas_ta as ta
-import math
+import numpy as np
 
 class Strategy:
     def __init__(self, dataframe):
@@ -132,8 +132,8 @@ class Strategy:
         take_profits = []
 
         if not new_df_filtered.empty:
-            lower_tolerance = new_df_filtered['high_shift_3'] - (new_df_filtered['low_shift_2'] * math.tan(0.02))
-            upper_tolerance = new_df_filtered['high_shift_3'] + (new_df_filtered['low_shift_2'] * math.tan(0.02))
+            lower_tolerance = new_df_filtered['high_shift_3'] - (new_df_filtered['low_shift_2'] * np.tan(0.02))
+            upper_tolerance = new_df_filtered['high_shift_3'] + (new_df_filtered['low_shift_2'] * np.tan(0.02))
             mask = (upper_tolerance >= new_df_filtered['high_shift_1']) & (new_df_filtered['high_shift_1'] >= lower_tolerance)
 
             valid_df = new_df_filtered[mask]
