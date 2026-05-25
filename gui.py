@@ -156,7 +156,7 @@ class TradingBotGUI(tk.Tk):
         self.var_start_date = add_field(2, "Start Date (YYYY-MM-DD):", "entry", two_months_ago)
         self.var_end_date = add_field(3, "End Date (YYYY-MM-DD):", "entry", datetime.now().strftime("%Y-%m-%d"))
         
-        self.var_strategy = add_field(4, "Strategy Model:", "combo", "Noir", ["Noir", "BreakerBlock", "DoubleTop", "TripleTop"])
+        self.var_strategy = add_field(4, "Strategy Model:", "combo", "Noir", ["Noir", "BreakerBlock", "DoubleTop", "TripleTop", "MLPattern", "MLPatternBest"])
         self.var_balance = add_field(5, "Initial Balance ($):", "entry", "1000.0")
         self.var_risk_amount = add_field(6, "Risk Value:", "entry", "25.0")
         self.var_risk_type = add_field(7, "Risk Metric Type:", "combo", "fixed", ["fixed", "percentage"])

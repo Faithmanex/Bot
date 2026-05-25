@@ -252,3 +252,50 @@ class Strategy:
             plot_df["Risk_to_Reward_Ratio"] = pd.Series(dtype='float64')
 
         return plot_df
+
+    def MLPatternBest(self, RR):
+        from .ml_pattern import get_all_pivot_sequences, predict_pattern_probability
+        
+        sequences, trigger_indices, is_buy_list = get_all_pivot_sequences(self.new_df)
+        symbol = self.symbol if self.symbol else "EURUSD"
+        print(f"[INFO] Evaluating {len(sequences)} swing patterns using MLPatternBest (RR={RR:.1f}) for {symbol}...")
+        
+        occurences = []
+        entries = []
+        stop_losses = []
+        take_profits = []
+
+        for seq, trig_time, is_buy in zip(sequences, trigger_indices, is_buy_list):
+            prob = predict_pattern_probability(symbol, seq)
+            if prob >= 0.50:  # Optimal confidence threshold (50%) found in hyper-sweep
+                entry_price = seq[0]["val"]
+                wave_size = abs(seq[1]["val"] - seq[2]["val"])
+                if wave_size == 0:
+                    wave_size = 1e-4
+
+                if is_buy:
+                    stop_loss = entry_price - (wave_size * 0.5)
+                    take_profit = entry_price + (entry_price - stop_loss) * RR
+                else:
+                    stop_loss = entry_price + (wave_size * 0.5)
+                    take_profit = entry_price - (stop_loss - entry_price) * RR
+
+                occurences.append(trig_time)
+                entries.append(entry_price)
+                stop_losses.append(stop_loss)
+                take_profits.append(take_profit)
+
+        plot_df = pd.DataFrame({
+            "Occurence": occurences,
+            "Entry": entries,
+            "Stop_Loss": stop_losses,
+            "Take_Profit": take_profits,
+        })
+        if not plot_df.empty:
+            plot_df["Risk_to_Reward_Ratio"] = (plot_df["Take_Profit"] - plot_df["Entry"]) / (
+                plot_df["Entry"] - plot_df["Stop_Loss"]
+            )
+        else:
+            plot_df["Risk_to_Reward_Ratio"] = pd.Series(dtype='float64')
+
+        return plot_df
