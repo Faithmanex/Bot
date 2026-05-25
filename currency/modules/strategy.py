@@ -218,7 +218,11 @@ class Strategy:
         stop_losses = []
         take_profits = []
 
-        for seq, trig_time, is_buy in zip(sequences, trigger_indices, is_buy_list):
+        total_pats = len(sequences)
+        for idx, (seq, trig_time, is_buy) in enumerate(zip(sequences, trigger_indices, is_buy_list)):
+            if total_pats > 0 and ((idx + 1) % max(1, total_pats // 10) == 0 or (idx + 1) == total_pats):
+                print(f"[INFO] Evaluating patterns: {idx + 1}/{total_pats} ({(idx + 1)/total_pats*100:.1f}%)")
+            
             prob = predict_pattern_probability(symbol, seq)
             if prob >= 0.58:  # Trigger on high probability predictions
                 entry_price = seq[0]["val"]
@@ -265,7 +269,11 @@ class Strategy:
         stop_losses = []
         take_profits = []
 
-        for seq, trig_time, is_buy in zip(sequences, trigger_indices, is_buy_list):
+        total_pats = len(sequences)
+        for idx, (seq, trig_time, is_buy) in enumerate(zip(sequences, trigger_indices, is_buy_list)):
+            if total_pats > 0 and ((idx + 1) % max(1, total_pats // 10) == 0 or (idx + 1) == total_pats):
+                print(f"[INFO] Evaluating patterns: {idx + 1}/{total_pats} ({(idx + 1)/total_pats*100:.1f}%)")
+            
             prob = predict_pattern_probability(symbol, seq)
             if prob >= 0.50:  # Optimal confidence threshold (50%) found in hyper-sweep
                 entry_price = seq[0]["val"]
