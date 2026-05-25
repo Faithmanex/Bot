@@ -19,7 +19,7 @@ settings = load_settings()
 timeframes = {
     "M5": mt5.TIMEFRAME_M5,
 }
-start_time = pd.to_datetime("2024-01-01 00:00:00")
+start_time = datetime(2024, 1, 1, 0, 0, 0)
 end_time = datetime.now()
 
 
@@ -36,13 +36,14 @@ def shutdown_mt5():
 
 def get_historical_data(symbol, timeframe, timeframe_name, start, end):
     rates = mt5.copy_rates_range(symbol, timeframe, start, end)
-    if rates is None:
+    if rates is None or len(rates) == 0:
         print(f"No data retrieved for {symbol}, error code = {mt5.last_error()}")
-        return
+        return False
     df = pd.DataFrame(rates)
     df["time"] = pd.to_datetime(df["time"], unit="s")
     filename = os.path.join(HISTORY_DATA_DIR, f"{symbol}_data_{timeframe_name}.csv")
     df.to_csv(filename, index=False)
+    return True
 
 
 def prep_data(symbol, timeframe_name, visualize=False):
@@ -204,38 +205,59 @@ def _place_pending_order(symbol, entry_price, stop_loss, take_profit, risk_amoun
         print(f"Failed to place order for {symbol} @ {entry_price}: retcode={res.retcode}")
 
 
-def analyze_symbol(symbol, live_trading=False):
+def analyze_symbol(symbol, live_trading=False, config=None):
+    if config is None:
+        config = {}
+
     summary_results = []
-    strategies = ["Noir"]
+    strategies = [config.get("strategy", "Noir")]
+    timeframe_name = config.get("timeframe", "M5")
 
-    for timeframe_name, timeframe in timeframes.items():
-        get_historical_data(symbol, timeframe, timeframe_name, start_time, end_time)
-        df = prep_data(symbol, timeframe_name)
-        clean_data(df, symbol)
-        detect_pivot_points(df, symbol)
+    tf_map = {
+        "M1": mt5.TIMEFRAME_M1,
+        "M5": mt5.TIMEFRAME_M5,
+        "M15": mt5.TIMEFRAME_M15,
+        "M30": mt5.TIMEFRAME_M30,
+        "H1": mt5.TIMEFRAME_H1,
+        "H4": mt5.TIMEFRAME_H4,
+        "D1": mt5.TIMEFRAME_DAILY,
+    }
+    timeframe = tf_map.get(timeframe_name, mt5.TIMEFRAME_M5)
 
-        for strategy_name in strategies:
-            strategy = Strategy(df)
-            plot_df = getattr(strategy, strategy_name)(RR=5)
+    start = config.get("start_time", start_time)
+    end = config.get("end_time", end_time)
 
-            initial_balance = 1000
-            risk_amount = 25
-            risk_type = "fixed"
+    if not get_historical_data(symbol, timeframe, timeframe_name, start, end):
+        print(f"Skipping {symbol} {timeframe_name} — no data available.")
+        return
 
-            backtest_results_df, wins, losses, neither = run_strategy(
-                df, plot_df, RR=5, initial_balance=initial_balance,
-                risk_amount=risk_amount, risk_type=risk_type,
-                symbol=symbol, live_trading=live_trading,
-            )
+    df = prep_data(symbol, timeframe_name)
+    clean_data(df, symbol)
+    detect_pivot_points(df, symbol)
 
-            if not backtest_results_df.empty:
-                final_balance = backtest_results_df.iloc[-1]["Balance"]
-                win_rate = (wins / (wins + losses)) * 100 if (wins + losses) > 0 else 0
-                summary_results.append({
-                    "Symbol": symbol, "Timeframe": timeframe_name, "Strategy": strategy_name,
-                    "Wins": wins, "Losses": losses, "Neither": neither,
-                    "Final Balance": final_balance, "Win Rate": win_rate,
-                })
+    for strategy_name in strategies:
+        strategy = Strategy(df)
+        rr = config.get("rr", 5.0)
+        plot_df = getattr(strategy, strategy_name)(RR=rr)
+
+        initial_balance = config.get("initial_balance", 1000.0)
+        risk_amount = config.get("risk_amount", 25.0)
+        risk_type = config.get("risk_type", "fixed")
+
+        backtest_results_df, wins, losses, neither = run_strategy(
+            df, plot_df, RR=rr, initial_balance=initial_balance,
+            risk_amount=risk_amount, risk_type=risk_type,
+            symbol=symbol, live_trading=live_trading,
+        )
+
+        if not backtest_results_df.empty:
+            final_balance = backtest_results_df.iloc[-1]["Balance"]
+            win_rate = (wins / (wins + losses)) * 100 if (wins + losses) > 0 else 0
+            summary_results.append({
+                "Symbol": symbol, "Timeframe": timeframe_name, "Strategy": strategy_name,
+                "Wins": wins, "Losses": losses, "Neither": neither,
+                "Final Balance": final_balance, "Win Rate": win_rate,
+            })
 
     summary_df = pd.DataFrame(summary_results)
     summary_filename = "live_trading_summary.csv" if live_trading else "backtest_summary.csv"
@@ -243,22 +265,35 @@ def analyze_symbol(symbol, live_trading=False):
     print(summary_df)
 
 
-def main(live_trading=False, stop_event=None):
+def main(live_trading=False, stop_event=None, config=None):
     os.makedirs(HISTORY_DATA_DIR, exist_ok=True)
     os.makedirs(BACKTEST_SUMMARY_DIR, exist_ok=True)
 
     if not initialize_mt5():
         return
 
+    if config is None:
+        config = {}
+
+    symbols_list = config.get("symbols", trading_pairs.symbols)
+    if isinstance(symbols_list, str):
+        symbols_list = [s.strip() for s in symbols_list.split(",") if s.strip()]
+
     try:
         if live_trading:
             while stop_event is None or not stop_event.is_set():
-                for symbol in trading_pairs.symbols:
-                    analyze_symbol(symbol, live_trading=True)
-                time.sleep(60)
+                for symbol in symbols_list:
+                    if stop_event is not None and stop_event.is_set():
+                        break
+                    analyze_symbol(symbol, live_trading=True, config=config)
+                # Sleep in 1-second ticks to respond to stop_event immediately
+                for _ in range(60):
+                    if stop_event is not None and stop_event.is_set():
+                        break
+                    time.sleep(1)
         else:
-            for symbol in trading_pairs.symbols:
-                analyze_symbol(symbol, live_trading=False)
+            for symbol in symbols_list:
+                analyze_symbol(symbol, live_trading=False, config=config)
     finally:
         shutdown_mt5()
 
