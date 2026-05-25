@@ -194,18 +194,9 @@ def detect_pivot_points(df, symbol, visualize=False):
 
 def initialize_sent_limits():
     """
-    Initialize or reset the sent limits database. Ensures the file exists with proper headers.
+    Initialize sent limits by checking MetaTrader 5 active orders directly.
     """
-    try:
-        if os.path.exists(order_db):
-            # Clear the file content
-            with open(order_db, 'w') as file:
-                file.write('symbol,entry_price\n')  # Write headers to the file
-        else:
-            # Create a new file with headers
-            pd.DataFrame(columns=["symbol", "entry_price"]).to_csv(order_db, index=False)
-    except Exception as e:
-        print(f"Error initializing sent limits: {e}")
+    print("Initializing MetaTrader 5 active orders tracking...")
 
 
 def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
@@ -240,7 +231,14 @@ def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
     results = []
     balance_history = []
 
-    sent_limits = pd.read_csv(order_db) if os.path.exists(order_db) else pd.DataFrame(columns=["symbol", "entry_price"])
+    active_order_prices = []
+    if live_trading:
+        try:
+            orders = mt5.orders_get(symbol=symbol)
+            if orders is not None:
+                active_order_prices = [o.price_open for o in orders]
+        except Exception as e:
+            print(f"Error querying active MT5 orders: {e}")
 
     entries = plot_df['Entry'].values
     stop_losses = plot_df['Stop_Loss'].values
@@ -259,8 +257,14 @@ def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
         take_profit = take_profits[idx]
         occurrence_time = occurrences[idx]
 
-        if live_trading and not sent_limits[(sent_limits['symbol'] == symbol) & (sent_limits['entry_price'].astype(float) == entry_price)].empty:
-            continue
+        if live_trading:
+            already_placed = False
+            for price in active_order_prices:
+                if abs(price - entry_price) < 1e-5:
+                    already_placed = True
+                    break
+            if already_placed:
+                continue
 
         occurrence_index = df.index.get_loc(occurrence_time)
         entry_reached = False
@@ -335,9 +339,7 @@ def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
 
                 res = mt5.order_send(request)
                 if res.retcode == mt5.TRADE_RETCODE_DONE:
-                    sent_limits = sent_limits._append({"symbol": symbol, "entry_price": entry_price}, ignore_index=True)
-                    sent_limits.to_csv(order_db, index=False)
-                    print(sent_limits)
+                    print(f"Pending limit order placed successfully for {symbol} at {entry_price}")
                 else:
                     print(f"Failed to place order: {res.retcode}")
             except Exception as e:
@@ -419,6 +421,8 @@ def main():
 if __name__ == "__main__":
     initialize_mt5()
     initialize_sent_limits()
+    # Lazily resolve broker symbols after MT5 connection is established
+    trading_pairs.symbols = trading_pairs.get_matched_symbols(trading_pairs.symbols)
     while True:
         for symbol in trading_pairs.symbols:
             for timeframe_name, timeframe in timeframes.items():

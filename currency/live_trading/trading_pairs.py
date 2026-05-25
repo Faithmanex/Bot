@@ -80,21 +80,25 @@ except ValueError as e:
     print(e)
     symbols = []
 
-import MetaTrader5 as mt5
-mt5.initialize()
-broker_symbols = mt5.symbols_get()
+def get_matched_symbols(base_symbols):
+    import MetaTrader5 as mt5
+    if not mt5.initialize():
+        print("Failed to initialize MT5 inside trading_pairs.")
+        return base_symbols
 
-matched_symbols = []
+    broker_symbols = mt5.symbols_get()
+    if broker_symbols is None:
+        return base_symbols
 
-for broker_symbol in broker_symbols:
-    for my_symbol in symbols:
-        if broker_symbol.name.startswith(my_symbol):
-            matched_symbols.append(broker_symbol.name)
-        else:
-            # Check for symbols with suffixes
-            if '.' in broker_symbol.name:
-                base, suffix = broker_symbol.name.split('.', 1)
-                if base == my_symbol:
-                    matched_symbols.append(broker_symbol.name)
-
-symbols = matched_symbols
+    matched_symbols = []
+    for broker_symbol in broker_symbols:
+        for my_symbol in base_symbols:
+            if broker_symbol.name.startswith(my_symbol):
+                matched_symbols.append(broker_symbol.name)
+            else:
+                # Check for symbols with suffixes
+                if '.' in broker_symbol.name:
+                    base, suffix = broker_symbol.name.split('.', 1)
+                    if base == my_symbol:
+                        matched_symbols.append(broker_symbol.name)
+    return matched_symbols

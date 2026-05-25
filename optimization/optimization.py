@@ -93,53 +93,23 @@ def prep_data(symbol, timeframe_name, visualize=False):
     return ohlcv_df
 
 
-def clean_data(df, symbol, visualize=False):
-    print(f"Cleaning Data...")
-    # Check if symbol exists in settings, otherwise use default settings
-    symbol_settings = settings.get(symbol, {"polyorder": 2, "window_length": 5})  # Default values
-    
-    # Extract settings for the symbol
-    polyorder = symbol_settings["polyorder"]
-    window_length = symbol_settings["window_length"]
-    
-    # Ensure df["Close"] is treated as a numpy array for efficiency
+def clean_data(df, polyorder, window_length):
     close_prices = df["Close"].to_numpy()
-    
-    # Apply the Savitzky-Golay filter
     smoothed_close = savgol_filter(close_prices, window_length, polyorder)
-    
-    # Add smoothed close prices to DataFrame
     df["smoothed_close"] = smoothed_close
-    
-    print(f'window length = {window_length}')
-    print(f'Poly order = {polyorder}')
-    
-    if visualize:
-        plt.figure(figsize=(10, 5))
-        plt.plot(df.index, close_prices, label="Close Price")
-        plt.plot(df.index, smoothed_close, label="Smoothed Close Price")
-        plt.legend()
-        plt.show()
+    return df
 
 
-def detect_pivot_points(df, symbol, visualize=False):
-    print("Detecting Pivots...")
-    order = settings.get(symbol, {"order": 5})["order"]
-    print(f'Order: {order}')
+def detect_pivot_points(df, order):
     smoothed_close = df["smoothed_close"].to_numpy()
-    
     highs = argrelextrema(smoothed_close, np.greater, mode="wrap", order=order)[0]
     lows = argrelextrema(smoothed_close, np.less, mode="wrap", order=order)[0]
 
+    df["Is_High"] = np.nan
+    df["Is_Low"] = np.nan
     df.loc[df.index[highs], "Is_High"] = df["High"].iloc[highs]
     df.loc[df.index[lows], "Is_Low"] = df["Low"].iloc[lows]
-    
-    if visualize:
-        apd = [
-            mpf.make_addplot(df["Is_High"], scatter=True, markersize=30, marker="^", color="g"),
-            mpf.make_addplot(df["Is_Low"], scatter=True, markersize=30, marker="v", color="r")
-        ]
-        mpf.plot(df, type="candle", addplot=apd, style="charles", title=f"{symbol} 1 Hour")
+    return df
 
 
 def calculate_drawdown(balance_series):
@@ -159,64 +129,64 @@ def calculate_max_daily_drawdown(balance_df):
     return max_daily_drawdown, daily_drawdown.idxmax()
 
 def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
-    print(f"Running Backtest...😁")
-
-    live_trading = False
-    print(f'Live trading: {live_trading}')
-    if live_trading:
-        if not mt5.initialize():
-            print("initialize() failed")
-            return
-
     balance = initial_balance
-    balance_history = []
     results = []
+    balance_history = []
     wins = 0
     losses = 0
     neither = 0
 
-    if risk_type == "percentage":
-        risk = risk_amount / 100
-    else:
-        risk = risk_amount
+    if plot_df.empty:
+        return pd.DataFrame(), 0, 0, 0, 0.0, 0.0, 0.0, None
 
-    for trade in plot_df.itertuples():
-        entry_price = float(trade.Entry)
-        stop_loss = float(trade.Stop_Loss)
-        take_profit = float(trade.Take_Profit)
-        occurrence_time = trade.Occurence
+    entries = plot_df['Entry'].values
+    stop_losses = plot_df['Stop_Loss'].values
+    take_profits = plot_df['Take_Profit'].values
+    occurrences = plot_df['Occurence'].values
+
+    high_prices = df['High'].values
+    low_prices = df['Low'].values
+
+    for idx, entry_price in enumerate(entries):
+        stop_loss = stop_losses[idx]
+        take_profit = take_profits[idx]
+        occurrence_time = occurrences[idx]
 
         occurrence_index = df.index.get_loc(occurrence_time)
-        trade_df = df.iloc[occurrence_index + 1:]
+        entry_reached = False
 
-        entry_reached_mask = trade_df["High"] >= entry_price
-        entry_reached_index = trade_df[entry_reached_mask].index
+        if risk_type == "percentage":
+            Risk = (risk_amount / 100) * balance
+        else:
+            Risk = risk_amount
 
-        if not entry_reached_index.empty:
-            entry_reached_index = entry_reached_index[0]
-            trade_df = trade_df.loc[entry_reached_index:]
+        subsequent_highs = high_prices[occurrence_index + 1:]
+        subsequent_lows = low_prices[occurrence_index + 1:]
 
-            stop_loss_reached_mask = trade_df["High"] >= stop_loss
-            take_profit_reached_mask = trade_df["Low"] <= take_profit
+        entry_reached_mask = subsequent_highs >= entry_price
+        if np.any(entry_reached_mask):
+            entry_reached = True
+            first_entry_index = np.argmax(entry_reached_mask)
 
-            stop_loss_index = trade_df[stop_loss_reached_mask].index
-            take_profit_index = trade_df[take_profit_reached_mask].index
+            stop_loss_reached_mask = subsequent_highs[first_entry_index:] >= stop_loss
+            take_profit_reached_mask = subsequent_lows[first_entry_index:] <= take_profit
 
-            if not stop_loss_index.empty and not take_profit_index.empty:
-                if stop_loss_index[0] < take_profit_index[0]:
-                    balance -= risk * balance if risk_type == "percentage" else risk
-                    result = "SL"
-                    losses += 1
-                else:
-                    balance += (risk * RR * balance) if risk_type == "percentage" else (risk * RR)
-                    result = "TP"
-                    wins += 1
-            elif not stop_loss_index.empty:
-                balance -= risk * balance if risk_type == "percentage" else risk
+            if np.any(stop_loss_reached_mask):
+                stop_loss_reached_index = np.argmax(stop_loss_reached_mask)
+            else:
+                stop_loss_reached_index = len(subsequent_highs)
+
+            if np.any(take_profit_reached_mask):
+                take_profit_reached_index = np.argmax(take_profit_reached_mask)
+            else:
+                take_profit_reached_index = len(subsequent_lows)
+
+            if stop_loss_reached_index < take_profit_reached_index:
+                balance -= Risk
                 result = "SL"
                 losses += 1
-            elif not take_profit_index.empty:
-                balance += (risk * RR * balance) if risk_type == "percentage" else (risk * RR)
+            elif take_profit_reached_index < stop_loss_reached_index:
+                balance += Risk * RR
                 result = "TP"
                 wins += 1
             else:
@@ -224,28 +194,6 @@ def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
         else:
             result = "Pending"
             neither += 1
-
-            if live_trading:
-                volume = 0.5  # Adjust this as needed
-
-                request = {
-                    "action": mt5.TRADE_ACTION_PENDING,
-                    "symbol": symbol,
-                    "volume": volume,
-                    "type": mt5.ORDER_TYPE_SELL_LIMIT,
-                    "price": entry_price,
-                    "sl": stop_loss,
-                    "tp": take_profit,
-                    "deviation": 20,
-                    "magic": 0,
-                    "comment": "EchelNet Bot",
-                    "type_time": mt5.ORDER_TIME_GTC,
-                    "type_filling": mt5.ORDER_FILLING_IOC,
-                }
-
-                res = mt5.order_send(request)
-                if res.retcode != mt5.TRADE_RETCODE_DONE:
-                    print(f"Failed to place order: {res.retcode}")
 
         trade_result = {
             "Occurrence": occurrence_time,
@@ -263,19 +211,9 @@ def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
 
     balance_series = pd.Series([entry['Balance'] for entry in balance_history])
     max_drawdown_amount, max_drawdown_percentage = calculate_drawdown(balance_series)
-    final_balance = backtest_df.iloc[-1]["Balance"]
+
     balance_df = pd.DataFrame(balance_history)
     max_daily_drawdown, worst_day = calculate_max_daily_drawdown(balance_df)
-    print(f"Starting Balance: {initial_balance}")
-    print(f"Max Drawdown Amount: {max_drawdown_amount}")
-    print(f"Max Drawdown Percentage: {max_drawdown_percentage * 100:.2f}%")
-    print(f"Max Daily Drawdown: {max_daily_drawdown * 100:.2f}% on {worst_day}")
-    print(f'Final Balance: {final_balance}')
-
-    print()
-    print()
-    print()
-
 
     return backtest_df, wins, losses, neither, max_drawdown_amount, max_drawdown_percentage, max_daily_drawdown, worst_day
 
@@ -325,74 +263,83 @@ def main():
             print(f"\nFetching historical data for {symbol} on {timeframe_name} timeframe...")
             get_historical_data(symbol, timeframe, timeframe_name, start_time, end_time)
 
+            # Load the raw dataframe once per symbol/timeframe
+            df_raw = prep_data(symbol, timeframe_name, visualize=False)
+
             for polyorder in range(2, 15):
                 for window_length in range(2, 20):
+                    if polyorder >= window_length:
+                        continue
+
+                    # Apply smoothing once per (polyorder, window_length)
+                    df_smoothed = df_raw.copy()
+                    df_smoothed = clean_data(df_smoothed, polyorder, window_length)
+
                     for order in range(2, 15):
-                        if polyorder < window_length:
-                            settings[symbol] = {
-                                "polyorder": polyorder,
-                                "window_length": window_length,
-                                "order": order
-                            }
+                        # Detect pivot points for the current order
+                        df_pivots = df_smoothed.copy()
+                        df_pivots = detect_pivot_points(df_pivots, order)
 
-                            def process_data():
-                                df = prep_data(symbol, timeframe_name, visualize=False)
-                                clean_data(df, symbol)
-                                detect_pivot_points(df, symbol)
-                                return df
+                        print(f"Running backtest for {symbol} on {timeframe_name} timeframe with polyorder {polyorder}, window length {window_length}, order {order}...")
 
-                            df = process_data()
+                        for strategy_name in strategies:
+                            strategy = Strategy(df_pivots)
+                            plot_df = getattr(strategy, strategy_name)(RR=5)
 
-                            print(f"Running backtest for {symbol} on {timeframe_name} timeframe with polyorder {polyorder} and window length {window_length}...")
+                            initial_balance = 100
+                            risk_amount = 10
+                            risk_type = "fixed"
 
-                            for strategy_name in strategies:
-                                strategy = Strategy(df)
-                                plot_df = getattr(strategy, strategy_name)(RR=5)
+                            results = backtest(df_pivots, plot_df, RR=5, initial_balance=initial_balance, risk_amount=risk_amount, risk_type=risk_type, symbol=symbol)
+                            backtest_results_df, wins, losses, neither, max_drawdown_amount, max_drawdown_percentage, max_daily_drawdown, worst_day = results
 
-                                initial_balance = 100
-                                risk_amount = 10
-                                risk_type = "fixed"
-
-                                results = backtest(df, plot_df, RR=5, initial_balance=initial_balance, risk_amount=risk_amount, risk_type=risk_type, symbol=symbol)
-
-                                backtest_results_df, wins, losses, neither, max_drawdown_amount, max_drawdown_percentage, max_daily_drawdown, worst_day = results
-
+                            if backtest_results_df.empty:
+                                final_balance = initial_balance
+                                highest_count = 0
+                                win_rate = 0.0
+                            else:
                                 final_balance = backtest_results_df.iloc[-1]["Balance"]
                                 win_rate = (wins / (wins + losses)) * 100 if wins != 0 else 0
 
-                                current_count = highest_count = 0
-                                for i in range(1, len(backtest_results_df)):
-                                    if backtest_results_df.iloc[i]["Result"] == backtest_results_df.iloc[i - 1]["Result"] == "SL":
+                                current_count = 0
+                                highest_count = 0
+                                for i in range(len(backtest_results_df)):
+                                    if backtest_results_df.iloc[i]["Result"] == "SL":
                                         current_count += 1
                                         highest_count = max(highest_count, current_count)
                                     else:
-                                        current_count = 1
+                                        current_count = 0
 
-                                summary_results.append({
-                                    "Symbol": symbol,
-                                    "Wins": wins,
-                                    "Losses": losses,
-                                    "Neither": neither,
-                                    "Consecutive SL": highest_count,
-                                    "Final Balance": final_balance,
-                                    "Win Rate": win_rate,
-                                    "P": polyorder,
-                                    "W": window_length,
-                                    "O": order
-                                })
+                            summary_results.append({
+                                "Symbol": symbol,
+                                "Wins": wins,
+                                "Losses": losses,
+                                "Neither": neither,
+                                "Consecutive SL": highest_count,
+                                "Final Balance": final_balance,
+                                "Win Rate": win_rate,
+                                "P": polyorder,
+                                "W": window_length,
+                                "O": order
+                            })
 
+                            if not backtest_results_df.empty:
                                 backtest_results_df["Symbol"] = symbol
                                 all_backtest_results.append(backtest_results_df)
-                                optimization_df = pd.DataFrame(summary_results)
-                                optimization_df.to_csv(os.path.join(backtest_summary_dir, f'Opt_{symbol}_summary.csv'), index=True)
+
+            # Save the individual symbol's optimization summary once at the end of its run
+            optimization_df = pd.DataFrame(summary_results)
+            optimization_df.to_csv(os.path.join(backtest_summary_dir, f'Opt_{symbol}_summary.csv'), index=True)
 
             # plot_balance_graph(backtest_results_df)
-            combined_backtest_df = pd.concat(all_backtest_results)
-            combined_backtest_df.to_csv(os.path.join(backtest_summary_dir, "Combined_resuts.csv"), index=False)
+            if all_backtest_results:
+                combined_backtest_df = pd.concat(all_backtest_results)
+                combined_backtest_df.to_csv(os.path.join(backtest_summary_dir, "Combined_resuts.csv"), index=False)
 
-    summary_df = pd.DataFrame(summary_results)
-    print(summary_df)
-    summary_df.to_csv(os.path.join(backtest_summary_dir, "Complete_Optimization.csv"), index=False)
+    if summary_results:
+        summary_df = pd.DataFrame(summary_results)
+        print(summary_df)
+        summary_df.to_csv(os.path.join(backtest_summary_dir, "Complete_Optimization.csv"), index=False)
     shutdown_mt5()
 if __name__ == "__main__":
     main()

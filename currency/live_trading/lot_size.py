@@ -36,8 +36,6 @@ def calculate_lot_size(account_balance, risk_amount, stop_loss, entry_price, sym
     return lot_size
 
 def get_lot_size(risk_amount, stop_loss, account_currency, symbol, risk_type, account_balance, entry_price):
-    mt5.initialize()
-
     symbol_properties = get_symbol_properties(symbol)
     if symbol_properties:
         if risk_type == "percentage":
@@ -46,7 +44,6 @@ def get_lot_size(risk_amount, stop_loss, account_currency, symbol, risk_type, ac
         if lot_size is not None:
             return round(lot_size, 2)
 
-    mt5.shutdown()
     return None
 
 # Example usage of the program

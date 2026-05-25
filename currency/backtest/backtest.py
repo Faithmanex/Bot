@@ -158,63 +158,68 @@ def calculate_max_daily_drawdown(balance_df):
 def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
     print(f"Running Backtest...😁")
 
-    live_trading = False
-    print(f'Live trading: {live_trading}')
-    if live_trading:
-        if not mt5.initialize():
-            print("initialize() failed")
-            mt5.shutdown()
-            return
-
     balance = initial_balance
-    balance_history = []
     results = []
+    balance_history = []
     wins = 0
     losses = 0
     neither = 0
 
-    if risk_type == "percentage":
-        risk = risk_amount / 100
-    else:
-        risk = risk_amount
+    if plot_df.empty:
+        print(f"Starting Balance: {initial_balance}")
+        print("Max Drawdown Amount: 0.0")
+        print("Max Drawdown Percentage: 0.00%")
+        print("Max Daily Drawdown: 0.00% on None")
+        return pd.DataFrame(), 0, 0, 0, 0.0, 0.0, 0.0, None
 
-    for trade in plot_df.itertuples():
-        entry_price = float(trade.Entry)
-        stop_loss = float(trade.Stop_Loss)
-        take_profit = float(trade.Take_Profit)
-        occurrence_time = trade.Occurence
+    entries = plot_df['Entry'].values
+    stop_losses = plot_df['Stop_Loss'].values
+    take_profits = plot_df['Take_Profit'].values
+    occurrences = plot_df['Occurence'].values
+
+    high_prices = df['High'].values
+    low_prices = df['Low'].values
+
+    for idx, entry_price in enumerate(entries):
+        stop_loss = stop_losses[idx]
+        take_profit = take_profits[idx]
+        occurrence_time = occurrences[idx]
 
         occurrence_index = df.index.get_loc(occurrence_time)
-        trade_df = df.iloc[occurrence_index + 1:]
+        entry_reached = False
 
-        entry_reached_mask = trade_df["High"] >= entry_price
-        entry_reached_index = trade_df[entry_reached_mask].index
+        if risk_type == "percentage":
+            Risk = (risk_amount / 100) * balance
+        else:
+            Risk = risk_amount
 
-        if not entry_reached_index.empty:
-            entry_reached_index = entry_reached_index[0]
-            trade_df = trade_df.loc[entry_reached_index:]
+        subsequent_highs = high_prices[occurrence_index + 1:]
+        subsequent_lows = low_prices[occurrence_index + 1:]
 
-            stop_loss_reached_mask = trade_df["High"] >= stop_loss
-            take_profit_reached_mask = trade_df["Low"] <= take_profit
+        entry_reached_mask = subsequent_highs >= entry_price
+        if np.any(entry_reached_mask):
+            entry_reached = True
+            first_entry_index = np.argmax(entry_reached_mask)
 
-            stop_loss_index = trade_df[stop_loss_reached_mask].index
-            take_profit_index = trade_df[take_profit_reached_mask].index
+            stop_loss_reached_mask = subsequent_highs[first_entry_index:] >= stop_loss
+            take_profit_reached_mask = subsequent_lows[first_entry_index:] <= take_profit
 
-            if not stop_loss_index.empty and not take_profit_index.empty:
-                if stop_loss_index[0] < take_profit_index[0]:
-                    balance -= risk * balance if risk_type == "percentage" else risk
-                    result = "SL"
-                    losses += 1
-                else:
-                    balance += (risk * RR * balance) if risk_type == "percentage" else (risk * RR)
-                    result = "TP"
-                    wins += 1
-            elif not stop_loss_index.empty:
-                balance -= risk * balance if risk_type == "percentage" else risk
+            if np.any(stop_loss_reached_mask):
+                stop_loss_reached_index = np.argmax(stop_loss_reached_mask)
+            else:
+                stop_loss_reached_index = len(subsequent_highs)
+
+            if np.any(take_profit_reached_mask):
+                take_profit_reached_index = np.argmax(take_profit_reached_mask)
+            else:
+                take_profit_reached_index = len(subsequent_lows)
+
+            if stop_loss_reached_index < take_profit_reached_index:
+                balance -= Risk
                 result = "SL"
                 losses += 1
-            elif not take_profit_index.empty:
-                balance += (risk * RR * balance) if risk_type == "percentage" else (risk * RR)
+            elif take_profit_reached_index < stop_loss_reached_index:
+                balance += Risk * RR
                 result = "TP"
                 wins += 1
             else:
@@ -222,28 +227,6 @@ def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
         else:
             result = "Pending"
             neither += 1
-
-            if live_trading:
-                volume = 0.5  # Adjust this as needed
-
-                request = {
-                    "action": mt5.TRADE_ACTION_PENDING,
-                    "symbol": symbol,
-                    "volume": volume,
-                    "type": mt5.ORDER_TYPE_SELL_LIMIT,
-                    "price": entry_price,
-                    "sl": stop_loss,
-                    "tp": take_profit,
-                    "deviation": 20,
-                    "magic": 0,
-                    "comment": "EchelNet Bot",
-                    "type_time": mt5.ORDER_TIME_GTC,
-                    "type_filling": mt5.ORDER_FILLING_IOC,
-                }
-
-                res = mt5.order_send(request)
-                if res.retcode != mt5.TRADE_RETCODE_DONE:
-                    print(f"Failed to place order: {res.retcode}")
 
         trade_result = {
             "Occurrence": occurrence_time,
@@ -322,17 +305,11 @@ def main():
             print()
             print(f"Running backtest for {symbol} on {timeframe_name} timeframe...")
 
-            # Data preparation and cleaning (unchanged)
-            def process_data_wrapper():
-                global df
-                get_historical_data(symbol, timeframe, timeframe_name, start_time, end_time)
-                df = prep_data(symbol, timeframe_name, visualize=False)
-                clean_data(df, symbol)
-                detect_pivot_points(df, symbol)
-
-            thread_process_data = threading.Thread(target=process_data_wrapper)
-            thread_process_data.start()
-            thread_process_data.join()
+            # Data preparation and cleaning
+            get_historical_data(symbol, timeframe, timeframe_name, start_time, end_time)
+            df = prep_data(symbol, timeframe_name, visualize=False)
+            clean_data(df, symbol)
+            detect_pivot_points(df, symbol)
 
             for strategy_name in strategies:
                 strategy = Strategy(df)
@@ -345,26 +322,26 @@ def main():
                     df, plot_df, RR=5, initial_balance=initial_balance, risk_amount=risk_amount, risk_type=risk_type, symbol=symbol
                 )
 
-                final_balance = backtest_results_df.iloc[-1]["Balance"]
-                if wins != 0:
-                    win_rate = (wins / (wins + losses)) * 100
+                if backtest_results_df.empty:
+                    final_balance = initial_balance
+                    highest_count = 0
+                    win_rate = 0.0
                 else:
-                    win_rate = 0
-
-                current_count = 0
-                highest_count = 0
-
-                for i in range(len(backtest_results_df)):
-                    if (
-                        backtest_results_df.iloc[i]["Result"]
-                        == backtest_results_df.iloc[i - 1]["Result"]
-                        == "SL"
-                    ):
-                        current_count += 1
-                        if current_count > highest_count:
-                            highest_count = current_count
+                    final_balance = backtest_results_df.iloc[-1]["Balance"]
+                    if wins != 0:
+                        win_rate = (wins / (wins + losses)) * 100
                     else:
-                        current_count = 1
+                        win_rate = 0
+
+                    current_count = 0
+                    highest_count = 0
+
+                    for i in range(len(backtest_results_df)):
+                        if backtest_results_df.iloc[i]["Result"] == "SL":
+                            current_count += 1
+                            highest_count = max(highest_count, current_count)
+                        else:
+                            current_count = 0
 
                 summary_results.append({
                     "Symbol": symbol,
@@ -383,8 +360,9 @@ def main():
                 })
                 print(f"Final Balance: {final_balance}")
                 # Append the backtest results of the current symbol to the all_backtest_results list
-                backtest_results_df["Symbol"] = symbol  # Add a column to identify the symbol
-                all_backtest_results.append(backtest_results_df)  # Added to collect results
+                if not backtest_results_df.empty:
+                    backtest_results_df["Symbol"] = symbol  # Add a column to identify the symbol
+                    all_backtest_results.append(backtest_results_df)  # Added to collect results
         
         # Uncomment this to plot balance chart
         # plot_balance_graph(backtest_results_df)
