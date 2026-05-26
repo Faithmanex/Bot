@@ -679,14 +679,14 @@ class TradingBotGUI(tk.Tk):
             # Collect vlines: trigger + entry + exit candles
             vline_times = [trig_time]
             vline_colors = ["#FFD600"]
-            vline_widths = [2]
+            vline_widths = [0.8]
             vline_styles = ["dotted"]
 
             if entry_idx != -1:
                 entry_time = df.index[entry_idx]
                 vline_times.append(entry_time)
                 vline_colors.append("#00B0FF")
-                vline_widths.append(1.5)
+                vline_widths.append(0.8)
                 vline_styles.append("dashed")
 
             if exit_idx != -1:
@@ -694,7 +694,7 @@ class TradingBotGUI(tk.Tk):
                 exit_color = "#00E676" if trade["Result"] == "TP" else "#FF1744"
                 vline_times.append(exit_time)
                 vline_colors.append(exit_color)
-                vline_widths.append(2.5)
+                vline_widths.append(1.0)
                 vline_styles.append("solid")
 
             # Build figure using returnfig so mplfinance owns the datetime x-axis
