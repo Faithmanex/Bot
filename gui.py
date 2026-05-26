@@ -676,27 +676,6 @@ class TradingBotGUI(tk.Tk):
                 }
             )
 
-            # Collect vlines: trigger + entry + exit candles
-            vline_times = [trig_time]
-            vline_colors = ["#FFD600"]
-            vline_widths = [0.8]
-            vline_styles = ["dotted"]
-
-            if entry_idx != -1:
-                entry_time = df.index[entry_idx]
-                vline_times.append(entry_time)
-                vline_colors.append("#00B0FF")
-                vline_widths.append(0.8)
-                vline_styles.append("dashed")
-
-            if exit_idx != -1:
-                exit_time = df.index[exit_idx]
-                exit_color = "#00E676" if trade["Result"] == "TP" else "#FF1744"
-                vline_times.append(exit_time)
-                vline_colors.append(exit_color)
-                vline_widths.append(1.0)
-                vline_styles.append("solid")
-
             # Build figure using returnfig so mplfinance owns the datetime x-axis
             fig, axes = mpf.plot(
                 dfpl,
@@ -705,10 +684,10 @@ class TradingBotGUI(tk.Tk):
                 title=f"\nPATTERN INSPECTOR \u00b7 {symbol}  ({trade['Result']})",
                 warn_too_much_data=999999,
                 vlines=dict(
-                    vlines=vline_times,
-                    colors=vline_colors,
-                    linewidths=vline_widths,
-                    linestyle=vline_styles,
+                    vlines=[trig_time],
+                    colors=["#FFD600"],
+                    linewidths=[0.8],
+                    linestyle="dotted",
                 ),
                 hlines=dict(
                     hlines=[sl, entry, tp],
@@ -722,18 +701,12 @@ class TradingBotGUI(tk.Tk):
 
             fig.patch.set_facecolor("#121212")
 
-            # Vertical line legend
             ax0 = axes[0]
-            ax0.axhline(trig_bid, color="#FF1744", linestyle="dotted", linewidth=1.2)
-            ax0.axhline(trig_ask, color="#00B0FF", linestyle="dotted", linewidth=1.2)
-            
             ax0.annotate(f"SL  {sl:.5f}",   xy=(1, sl),    xycoords=("axes fraction", "data"), color="#FF1744", fontsize=7, ha="right", va="bottom")
             ax0.annotate(f"Entry  {entry:.5f}", xy=(1, entry), xycoords=("axes fraction", "data"), color="#00B0FF", fontsize=7, ha="right", va="bottom")
             ax0.annotate(f"TP  {tp:.5f}",    xy=(1, tp),    xycoords=("axes fraction", "data"), color="#00E676", fontsize=7, ha="right", va="bottom")
-            ax0.annotate(f"Bid  {trig_bid:.5f}", xy=(1, trig_bid), xycoords=("axes fraction", "data"), color="#FF1744", fontsize=7, ha="right", va="top")
-            ax0.annotate(f"Ask  {trig_ask:.5f}", xy=(1, trig_ask), xycoords=("axes fraction", "data"), color="#00B0FF", fontsize=7, ha="right", va="bottom")
 
-            # Label the exit candle on the chart
+            # Label the TP/SL hit on the chart
             if exit_idx != -1:
                 exit_time = df.index[exit_idx]
                 exit_price = tp if trade["Result"] == "TP" else sl
