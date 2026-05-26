@@ -28,7 +28,12 @@ def load_settings(settings_file="settings.json"):
 
     for symbol in symbols:
         if symbol not in settings:
-            settings[symbol] = default_symbol_settings
+            settings[symbol] = default_symbol_settings.copy()
+        else:
+            # Merge any missing default keys (e.g. after a sweep-only save)
+            for key, val in default_symbol_settings.items():
+                if key not in settings[symbol]:
+                    settings[symbol][key] = val
 
     return settings
 

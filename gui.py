@@ -182,13 +182,18 @@ class TradingBotGUI(tk.Tk):
         # Trade selector combobox
         selector_frame = tk.Frame(self.patterns_container, bg="#121212")
         selector_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        
+
         lbl_select = tk.Label(selector_frame, text="Select Trade Setup:", bg="#121212", fg=self.colors["accent"], font=("Segoe UI", 9, "bold"))
         lbl_select.pack(side="left", padx=(0, 10))
-        
+
         self.combo_trades = ttk.Combobox(selector_frame, state="readonly", width=55)
         self.combo_trades.pack(side="left")
         self.combo_trades.bind("<<ComboboxSelected>>", self.plot_selected_trade)
+
+        tk.Label(
+            selector_frame, text="  ←  →  keys to navigate",
+            bg="#121212", fg=self.colors["text_muted"], font=("Segoe UI", 8)
+        ).pack(side="left", padx=(12, 0))
 
         self.pattern_chart_frame = tk.Frame(self.patterns_container, bg="#121212")
         self.pattern_chart_frame.grid(row=1, column=0, sticky="nsew")
@@ -205,6 +210,10 @@ class TradingBotGUI(tk.Tk):
         self.bot_thread = None
         self.backtest_trades = None
         self.sweep_symbol = None
+
+        # Keyboard navigation for Pattern Charts tab
+        self.bind("<Left>",  self._navigate_trade)
+        self.bind("<Right>", self._navigate_trade)
 
     def create_config_form(self):
         lbl = tk.Label(self.config_card, text="STRATEGY PARAMETERS", bg=self.colors["card_bg"], fg=self.colors["accent"], font=("Segoe UI", 10, "bold"))
@@ -441,6 +450,30 @@ class TradingBotGUI(tk.Tk):
             
         except Exception as e:
             print(f"[ERROR] Failed to render equity curve: {e}")
+
+    def _navigate_trade(self, event):
+        """Navigate trades with ← → keys when Pattern Charts tab is active."""
+        try:
+            active_tab = self.notebook.index(self.notebook.select())
+            patterns_tab = self.notebook.index(self.tab_patterns)
+        except Exception:
+            return
+        if active_tab != patterns_tab:
+            return
+
+        values = self.combo_trades["values"]
+        if not values:
+            return
+
+        current = self.combo_trades.current()
+        if event.keysym == "Right":
+            new_idx = min(current + 1, len(values) - 1)
+        else:
+            new_idx = max(current - 1, 0)
+
+        if new_idx != current:
+            self.combo_trades.current(new_idx)
+            self.plot_selected_trade()
 
     def plot_selected_trade(self, event=None):
         symbol = self.var_symbols.get().split(",")[0].strip()
