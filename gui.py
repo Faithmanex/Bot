@@ -713,7 +713,7 @@ class TradingBotGUI(tk.Tk):
                 hlines=dict(
                     hlines=[sl, entry, tp],
                     colors=["#FF1744", "#00B0FF", "#00E676"],
-                    linewidths=[1.5, 1.5, 1.5],
+                    linewidths=[0.6, 0.8, 0.6],
                     linestyle="dashed",
                 ),
                 returnfig=True,
