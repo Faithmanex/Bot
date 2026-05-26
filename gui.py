@@ -12,6 +12,7 @@ import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+import mplfinance as mpf
 
 from currency.unified_trading import main as run_trading_logic
 from currency.modules import trading_pairs
@@ -21,7 +22,7 @@ class TradingBotGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Echelnet Unified Algorithmic Trading Terminal")
-        self.geometry("1200x720")
+        self.geometry("1200x750")
         self.configure(bg="#121212")
 
         # Premium Dark Palette
@@ -145,13 +146,42 @@ class TradingBotGUI(tk.Tk):
         self.metrics_frame.grid(row=0, column=1, sticky="nsew", padx=(10, 0), pady=0)
         self.metrics_frame.grid_propagate(False)
 
-        # Initialize embedded Canvas and Metrics widgets
+        # Tab 3: Visual Candlestick Trade Pattern Inspector
+        self.tab_patterns = ttk.Frame(self.notebook, style="TFrame")
+        self.notebook.add(self.tab_patterns, text="   PATTERN CHARTS   ")
+        self.tab_patterns.grid_columnconfigure(0, weight=1)
+        self.tab_patterns.grid_rowconfigure(0, weight=1)
+        
+        self.patterns_container = tk.Frame(self.tab_patterns, bg="#121212")
+        self.patterns_container.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        self.patterns_container.grid_columnconfigure(0, weight=1)
+        self.patterns_container.grid_rowconfigure(1, weight=1)
+
+        # Trade selector combobox
+        selector_frame = tk.Frame(self.patterns_container, bg="#121212")
+        selector_frame.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        
+        lbl_select = tk.Label(selector_frame, text="Select Trade Setup:", bg="#121212", fg=self.colors["accent"], font=("Segoe UI", 9, "bold"))
+        lbl_select.pack(side="left", padx=(0, 10))
+        
+        self.combo_trades = ttk.Combobox(selector_frame, state="readonly", width=55)
+        self.combo_trades.pack(side="left")
+        self.combo_trades.bind("<<ComboboxSelected>>", self.plot_selected_trade)
+
+        self.pattern_chart_frame = tk.Frame(self.patterns_container, bg="#121212")
+        self.pattern_chart_frame.grid(row=1, column=0, sticky="nsew")
+        self.pattern_chart_frame.grid_columnconfigure(0, weight=1)
+        self.pattern_chart_frame.grid_rowconfigure(0, weight=1)
+
+        # Initialize embedded Canvases and Metrics widgets
         self.create_placeholder_chart()
         self.create_metrics_dashboard()
+        self.create_placeholder_pattern_chart()
 
         # Core thread states
         self.stop_event = threading.Event()
         self.bot_thread = None
+        self.backtest_trades = None
 
     def create_config_form(self):
         lbl = tk.Label(self.config_card, text="STRATEGY PARAMETERS", bg=self.colors["card_bg"], fg=self.colors["accent"], font=("Segoe UI", 10, "bold"))
@@ -238,6 +268,27 @@ class TradingBotGUI(tk.Tk):
         self.canvas.draw()
         self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
 
+    def create_placeholder_pattern_chart(self):
+        # Placeholder figure for detailed trade patterns
+        self.pattern_fig = Figure(figsize=(6, 4), dpi=100, facecolor="#121212")
+        self.pattern_ax = self.pattern_fig.add_subplot(111)
+        self.pattern_ax.set_facecolor("#121212")
+        
+        self.pattern_ax.tick_params(colors="#EEEEEE", labelsize=8)
+        self.pattern_ax.spines['bottom'].set_color('#2C2C2C')
+        self.pattern_ax.spines['top'].set_color('#2C2C2C')
+        self.pattern_ax.spines['left'].set_color('#2C2C2C')
+        self.pattern_ax.spines['right'].set_color('#2C2C2C')
+        self.pattern_ax.grid(True, color="#222222", linestyle="--")
+        
+        self.pattern_ax.set_title("CANDLESTICK TRADE PLOT", color="#00ADB5", fontname="Segoe UI", fontsize=10, weight="bold")
+        self.pattern_ax.set_xlabel("Timeframe Intervals", color="#888888", fontname="Segoe UI", fontsize=8)
+        self.pattern_ax.set_ylabel("Asset Price", color="#888888", fontname="Segoe UI", fontsize=8)
+        
+        self.pattern_canvas = FigureCanvasTkAgg(self.pattern_fig, master=self.pattern_chart_frame)
+        self.pattern_canvas.draw()
+        self.pattern_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+
     def create_metrics_dashboard(self):
         # Header
         lbl = tk.Label(self.metrics_frame, text="TERMINAL METRICS", bg=self.colors["card_bg"], fg=self.colors["accent"], font=("Segoe UI", 10, "bold"))
@@ -312,12 +363,12 @@ class TradingBotGUI(tk.Tk):
             
             win_rate = (wins / total_closed * 100) if total_closed > 0 else 0.0
             
-            # Profit Factor (Gross Profits / Gross Losses)
+            # Profit Factor
             gross_profit = wins * (float(self.var_risk_amount.get()) * float(self.var_rr.get()))
             gross_loss = losses * float(self.var_risk_amount.get())
             profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (gross_profit if gross_profit > 0 else 1.0)
             
-            # Max Drawdown percentage
+            # Max Drawdown
             peak = balances[0]
             max_dd_pct = 0.0
             for b in balances:
@@ -328,7 +379,7 @@ class TradingBotGUI(tk.Tk):
                     max_dd_pct = dd
             max_dd_val = max_dd_pct * 100
             
-            # Maximum consecutive losses streak
+            # Streak
             current_streak = 0
             max_streak = 0
             for res in df_results["Result"]:
@@ -351,16 +402,100 @@ class TradingBotGUI(tk.Tk):
             self.metric_widgets["drawdown"].config(text=f"{max_dd_val:.1f}%", fg=self.colors["danger"])
             self.metric_widgets["loss_streak"].config(text=f"{max_streak} SL", fg=self.colors["text_muted"])
             
+            # 3. Populate Trade Selector Dropdown for Pattern Tab
+            self.backtest_trades = df_results[df_results["Result"].isin(["TP", "SL"])].copy()
+            trade_options = []
+            for i, row in self.backtest_trades.iterrows():
+                trade_options.append(f"#{i+1}: {row['Occurrence']} | {row['Result']} @ {row['Entry']:.5f}")
+            
+            self.combo_trades.config(values=trade_options)
+            if trade_options:
+                self.combo_trades.current(0)
+                self.plot_selected_trade()
+
             # Auto switch tab to show off the visual chart!
             self.notebook.select(self.tab_chart)
             
         except Exception as e:
             print(f"[ERROR] Failed to render equity curve: {e}")
 
+    def plot_selected_trade(self, event=None):
+        symbol = self.var_symbols.get().split(",")[0].strip()
+        timeframe_name = self.var_timeframe.get()
+        
+        sel_idx = self.combo_trades.current()
+        if sel_idx < 0 or self.backtest_trades is None or self.backtest_trades.empty:
+            return
+            
+        trade = self.backtest_trades.iloc[sel_idx]
+        trig_time = pd.to_datetime(trade["Occurrence"])
+        
+        from currency.settings import HISTORY_DATA_DIR
+        filename = os.path.join(HISTORY_DATA_DIR, f"{symbol}_data_{timeframe_name}.csv")
+        if not os.path.exists(filename):
+            return
+            
+        try:
+            df = pd.read_csv(filename)
+            df["time"] = pd.to_datetime(df["time"])
+            df.set_index("time", inplace=True)
+            
+            # Casing correction helper
+            rename_map = {"open": "Open", "high": "High", "low": "Low", "close": "Close", "tick_volume": "Volume"}
+            df.rename(columns=rename_map, inplace=True)
+            
+            # Slicing the sub-window (-15, +35 candles) around trigger point
+            try:
+                trig_loc = df.index.get_loc(trig_time)
+            except KeyError:
+                # Find nearest match if exact key isn't present
+                trig_loc = np.abs(df.index - trig_time).argmin()
+
+            start_pos = max(0, trig_loc - 15)
+            end_pos = min(len(df), trig_loc + 35)
+            dfpl = df.iloc[start_pos:end_pos].copy()
+            
+            # Reset visual plot
+            self.pattern_ax.clear()
+            self.pattern_ax.set_facecolor("#121212")
+            
+            # Plot Candlesticks using native mpf inside embedded ax
+            mpf.plot(
+                dfpl,
+                type="candle",
+                ax=self.pattern_ax,
+                style="charles",
+                warn_too_much_data=999999
+            )
+            
+            # Draw Horizontal Price lines
+            entry = float(trade["Entry"])
+            sl = float(trade["Stop_Loss"])
+            tp = float(trade["Take_Profit"])
+            
+            self.pattern_ax.axhline(entry, color="#00B0FF", linestyle="--", linewidth=1.5, label=f"Entry: {entry:.5f}")
+            self.pattern_ax.axhline(sl, color="#FF1744", linestyle="--", linewidth=1.5, label=f"SL: {sl:.5f}")
+            self.pattern_ax.axhline(tp, color="#00E676", linestyle="--", linewidth=1.5, label=f"TP: {tp:.5f}")
+            
+            # Draw Vertical Trigger marker
+            self.pattern_ax.axvline(dfpl.index[min(len(dfpl)-1, max(0, trig_loc - start_pos))], color="#FFD600", linestyle=":", linewidth=2, label="Setup Trigger")
+            
+            # Display Stylized Legend and titles
+            self.pattern_ax.legend(facecolor="#1E1E1E", edgecolor="#2C2C2C", labelcolor="#EEEEEE", loc="best", fontsize=8)
+            self.pattern_ax.set_title(f"PATTERN GRAPH INSPECTOR: {symbol} ({trade['Result']})", color="#00ADB5", fontname="Segoe UI", fontsize=10, weight="bold")
+            
+            self.pattern_canvas.draw()
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to draw trade setup chart: {e}")
+
     def start_bot(self):
         try:
             start_dt = datetime.strptime(self.var_start_date.get().strip(), "%Y-%m-%d")
             end_dt = datetime.strptime(self.var_end_date.get().strip(), "%Y-%m-%d")
+            if start_dt > end_dt:
+                self.log_message("[ERROR] Start Date must be BEFORE End Date! Please verify your timeline range.\n", "ERROR")
+                return
             init_bal = float(self.var_balance.get().strip())
             risk_val = float(self.var_risk_amount.get().strip())
             rr_val = float(self.var_rr.get().strip())
