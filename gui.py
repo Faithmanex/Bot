@@ -21,7 +21,7 @@ class TradingBotGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Echelnet Unified Algorithmic Trading Terminal")
-        self.geometry("1150x720")
+        self.geometry("1200x720")
         self.configure(bg="#121212")
 
         # Premium Dark Palette
@@ -129,10 +129,11 @@ class TradingBotGUI(tk.Tk):
         )
         self.log_area.grid(row=0, column=0, sticky="nsew")
 
-        # Tab 2: Visual Equity Growth Chart
+        # Tab 2: Visual Equity Growth Chart & Metrics Dashboard Panel
         self.tab_chart = ttk.Frame(self.notebook, style="TFrame")
         self.notebook.add(self.tab_chart, text="   EQUITY GRAPH   ")
-        self.tab_chart.grid_columnconfigure(0, weight=1)
+        self.tab_chart.grid_columnconfigure(0, weight=3)  # Matplotlib curve panel
+        self.tab_chart.grid_columnconfigure(1, weight=1)  # Quantitative stats panel
         self.tab_chart.grid_rowconfigure(0, weight=1)
 
         self.chart_frame = tk.Frame(self.tab_chart, bg="#121212")
@@ -140,8 +141,13 @@ class TradingBotGUI(tk.Tk):
         self.chart_frame.grid_columnconfigure(0, weight=1)
         self.chart_frame.grid_rowconfigure(0, weight=1)
 
-        # Initialize embedded Canvas
+        self.metrics_frame = tk.Frame(self.tab_chart, bg="#1E1E1E", width=260, highlightbackground="#2C2C2C", highlightthickness=1)
+        self.metrics_frame.grid(row=0, column=1, sticky="nsew", padx=(10, 0), pady=0)
+        self.metrics_frame.grid_propagate(False)
+
+        # Initialize embedded Canvas and Metrics widgets
         self.create_placeholder_chart()
+        self.create_metrics_dashboard()
 
         # Core thread states
         self.stop_event = threading.Event()
@@ -212,7 +218,7 @@ class TradingBotGUI(tk.Tk):
 
     def create_placeholder_chart(self):
         # Create gorgeous matching dark themed canvas
-        self.fig = Figure(figsize=(6, 4), dpi=100, facecolor="#121212")
+        self.fig = Figure(figsize=(5, 4), dpi=100, facecolor="#121212")
         self.ax = self.fig.add_subplot(111)
         self.ax.set_facecolor("#121212")
         
@@ -232,6 +238,32 @@ class TradingBotGUI(tk.Tk):
         self.canvas.draw()
         self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
 
+    def create_metrics_dashboard(self):
+        # Header
+        lbl = tk.Label(self.metrics_frame, text="TERMINAL METRICS", bg=self.colors["card_bg"], fg=self.colors["accent"], font=("Segoe UI", 10, "bold"))
+        lbl.pack(anchor="w", padx=15, pady=(15, 8))
+        
+        self.metric_widgets = {}
+        
+        def add_metric(label_text, key):
+            frame = tk.Frame(self.metrics_frame, bg=self.colors["card_bg"])
+            frame.pack(fill="x", padx=15, pady=5)
+            
+            lbl_name = tk.Label(frame, text=label_text, bg=self.colors["card_bg"], fg=self.colors["text_muted"], font=("Segoe UI", 8))
+            lbl_name.pack(anchor="w")
+            
+            lbl_val = tk.Label(frame, text="--", bg=self.colors["card_bg"], fg=self.colors["text"], font=("Segoe UI", 11, "bold"))
+            lbl_val.pack(anchor="w", pady=(1, 0))
+            
+            self.metric_widgets[key] = lbl_val
+
+        add_metric("Net Profit / Loss", "profit")
+        add_metric("Overall Win Rate", "winrate")
+        add_metric("Profit Factor", "profit_factor")
+        add_metric("Total Executed Trades", "total_trades")
+        add_metric("Max Account Drawdown", "drawdown")
+        add_metric("Consecutive Loss Streak", "loss_streak")
+
     def plot_equity_curve(self):
         symbol = self.var_symbols.get().split(",")[0].strip()
         detailed_file = os.path.join(BACKTEST_SUMMARY_DIR, f"detailed_results_{symbol}.csv")
@@ -248,7 +280,7 @@ class TradingBotGUI(tk.Tk):
             init_bal = float(self.var_balance.get().strip())
             balances = np.insert(balances, 0, init_bal)
             
-            # Clear and repaint
+            # 1. Clear and repaint Matplotlib canvas
             self.ax.clear()
             self.ax.set_facecolor("#121212")
             self.ax.tick_params(colors="#EEEEEE", labelsize=8)
@@ -262,13 +294,62 @@ class TradingBotGUI(tk.Tk):
             self.ax.set_xlabel("Number of Trades", color="#888888", fontname="Segoe UI", fontsize=8)
             self.ax.set_ylabel("Account Balance ($)", color="#888888", fontname="Segoe UI", fontsize=8)
             
-            # Draw line matching performance: green if winning, red if losing
             glow_color = self.colors["success"] if balances[-1] >= init_bal else self.colors["danger"]
             x = np.arange(len(balances))
             self.ax.plot(x, balances, color=glow_color, linewidth=2)
             self.ax.fill_between(x, balances, init_bal, color=glow_color, alpha=0.1)
             
             self.canvas.draw()
+
+            # 2. Calculate Quantitative Statistics & populate Sidebar Cards
+            net_profit = balances[-1] - init_bal
+            total_trades = len(df_results)
+            
+            closed_trades = df_results[df_results["Result"].isin(["SL", "TP"])]
+            wins = len(closed_trades[closed_trades["Result"] == "TP"])
+            losses = len(closed_trades[closed_trades["Result"] == "SL"])
+            total_closed = wins + losses
+            
+            win_rate = (wins / total_closed * 100) if total_closed > 0 else 0.0
+            
+            # Profit Factor (Gross Profits / Gross Losses)
+            gross_profit = wins * (float(self.var_risk_amount.get()) * float(self.var_rr.get()))
+            gross_loss = losses * float(self.var_risk_amount.get())
+            profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (gross_profit if gross_profit > 0 else 1.0)
+            
+            # Max Drawdown percentage
+            peak = balances[0]
+            max_dd_pct = 0.0
+            for b in balances:
+                if b > peak:
+                    peak = b
+                dd = (peak - b) / peak if peak > 0 else 0.0
+                if dd > max_dd_pct:
+                    max_dd_pct = dd
+            max_dd_val = max_dd_pct * 100
+            
+            # Maximum consecutive losses streak
+            current_streak = 0
+            max_streak = 0
+            for res in df_results["Result"]:
+                if res == "SL":
+                    current_streak += 1
+                    max_streak = max(max_streak, current_streak)
+                elif res == "TP":
+                    current_streak = 0
+
+            # Update Metrics Panel Labels dynamically
+            profit_widget = self.metric_widgets["profit"]
+            if net_profit >= 0:
+                profit_widget.config(text=f"+${net_profit:,.2f}", fg=self.colors["success"])
+            else:
+                profit_widget.config(text=f"-${abs(net_profit):,.2f}", fg=self.colors["danger"])
+                
+            self.metric_widgets["winrate"].config(text=f"{win_rate:.1f}%", fg=self.colors["accent"])
+            self.metric_widgets["profit_factor"].config(text=f"{profit_factor:.2f}", fg=self.colors["warning"])
+            self.metric_widgets["total_trades"].config(text=f"{total_trades}", fg=self.colors["text"])
+            self.metric_widgets["drawdown"].config(text=f"{max_dd_val:.1f}%", fg=self.colors["danger"])
+            self.metric_widgets["loss_streak"].config(text=f"{max_streak} SL", fg=self.colors["text_muted"])
             
             # Auto switch tab to show off the visual chart!
             self.notebook.select(self.tab_chart)
