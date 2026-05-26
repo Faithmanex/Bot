@@ -107,6 +107,8 @@
     <select id="sel-trade" onchange="jumpToTrade(this.value)" style="background:#1E1E1E;border:1px solid #2C2C2C;border-radius:3px;color:#CCC;cursor:pointer;font-family:'Segoe UI',sans-serif;font-size:11px;font-weight:600;max-width:150px;outline:none;padding:4px 8px">
       <option value="">-- Choose Setup --</option>
     </select>
+    <button class="stop-btn" onclick="prevTrade()" title="Previous trade" style="padding:4px 9px;font-size:10px;min-width:32px">◀ TRADE</button>
+    <button class="sp" onclick="nextTrade()" title="Next trade" style="padding:4px 9px;font-size:10px;min-width:32px">TRADE ▶</button>
     <span style="color:#444;font-size:11px;margin-left:6px">Speed</span>
     <div class="sp-group">
       <button class="sp on"  onclick="setSpd(1,this)">1×</button>
@@ -341,6 +343,32 @@ function jumpToTrade(idxStr) {
   advance(target);
   chart.timeScale().scrollToRealTime();
   document.getElementById('sel-trade').value = '';
+}
+
+function nextTrade() {
+  if (!activeTrades.length) return;
+  const sorted = activeTrades
+    .filter(t => t.sigIdx !== -1)
+    .sort((a, b) => a.sigIdx - b.sigIdx);
+  const next = sorted.find(t => t.sigIdx > rIdx);
+  if (!next) return;
+  const target = next.entryIdx !== -1 ? Math.max(0, next.entryIdx - 10) : Math.max(0, next.sigIdx - 5);
+  resetReplay();
+  advance(target);
+  chart.timeScale().scrollToRealTime();
+}
+
+function prevTrade() {
+  if (!activeTrades.length) return;
+  const sorted = activeTrades
+    .filter(t => t.sigIdx !== -1)
+    .sort((a, b) => a.sigIdx - b.sigIdx);
+  const prev = sorted.reverse().find(t => t.sigIdx < rIdx);
+  if (!prev) return;
+  const target = prev.entryIdx !== -1 ? Math.max(0, prev.entryIdx - 10) : Math.max(0, prev.sigIdx - 5);
+  resetReplay();
+  advance(target);
+  chart.timeScale().scrollToRealTime();
 }
 
 // ════════════════════════════════════════════════════════════════════
