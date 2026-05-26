@@ -472,8 +472,8 @@ class TradingBotGUI(tk.Tk):
             except KeyError:
                 trig_loc = int(np.abs(df.index - trig_time).argmin())
 
-            start_pos = max(0, trig_loc - 20)
-            end_pos   = min(len(df), trig_loc + 40)
+            start_pos = max(0, trig_loc - 60)
+            end_pos   = min(len(df), trig_loc + 100)
             dfpl = df.iloc[start_pos:end_pos][["Open", "High", "Low", "Close", "Volume"]].copy()
 
             entry = float(trade["Entry"])
