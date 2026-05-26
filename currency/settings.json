@@ -2,11 +2,29 @@
     "EURUSD": {
         "polyorder": 8,
         "window_length": 15,
-        "order": 3
+        "order": 3,
+        "best_rr": 3.0,
+        "best_threshold": 0.5
     },
     "GBPUSD": {
         "polyorder": 6,
         "window_length": 7,
         "order": 5
+    },
+    "Volatility 10 Index": {
+        "best_rr": 6.0,
+        "best_threshold": 0.5
+    },
+    "Volatility 15 Index": {
+        "best_rr": 6.0,
+        "best_threshold": 0.5
+    },
+    "Volatility 100 Index": {
+        "best_rr": 4.0,
+        "best_threshold": 0.5
+    },
+    "Volatility": {
+        "best_rr": 5.0,
+        "best_threshold": 0.58
     }
 }

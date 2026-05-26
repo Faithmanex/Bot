@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Backtest Share · Viewer</title>
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:#0D0D0D;color:#EEE;font-family:'Segoe UI',sans-serif;min-height:100vh;display:flex;flex-direction:column}
@@ -176,19 +177,23 @@ if (urlParams.has('file')) {
 
 function loadFile(file) {
   const reader = new FileReader();
-  reader.onload = e => {
+  reader.onload = async e => {
     try {
-      const data = JSON.parse(e.target.result);
+      const zip = await JSZip.loadAsync(e.target.result);
+      const dataFile = zip.file('data.json');
+      if (!dataFile) { alert('Invalid .btshare: missing data.json'); return; }
+      const text = await dataFile.async('string');
+      const data = JSON.parse(text);
       if (!data.version || !data.candles || !data.trades) {
         alert('Invalid .btshare file format.');
         return;
       }
       initViewer(data);
     } catch (err) {
-      alert('Failed to parse file: ' + err.message);
+      alert('Failed to parse .btshare file: ' + err.message);
     }
   };
-  reader.readAsText(file);
+  reader.readAsArrayBuffer(file);
 }
 
 // ════════════════════════════════════════════════════════════════════

@@ -1,0 +1,74 @@
+[
+  {
+    "id": "a89b62ca41d5",
+    "filename": "replay_a89b62ca41d5_replay.html",
+    "symbol": "",
+    "timeframe": "",
+    "name": "",
+    "uploaded_at": "2026-05-26 17:39:19",
+    "size": 46
+  },
+  {
+    "id": "90a0de55fa9d",
+    "filename": "replay_90a0de55fa9d_TestReplay.html",
+    "symbol": "EURUSD",
+    "timeframe": "M5",
+    "name": "TestReplay",
+    "uploaded_at": "2026-05-26 17:39:19",
+    "size": 46
+  },
+  {
+    "id": "2468bb37d910",
+    "filename": "replay_2468bb37d910_Integration.html",
+    "symbol": "TEST_SYM",
+    "timeframe": "M5",
+    "name": "Integration",
+    "uploaded_at": "2026-05-26 17:39:00",
+    "size": 46
+  },
+  {
+    "id": "e8c70835dfa0",
+    "filename": "replay_e8c70835dfa0_Integration.html",
+    "symbol": "TEST_SYM",
+    "timeframe": "M5",
+    "name": "Integration",
+    "uploaded_at": "2026-05-26 17:38:53",
+    "size": 46
+  },
+  {
+    "id": "1f7a7206ea64",
+    "filename": "replay_1f7a7206ea64_Integration.html",
+    "symbol": "TEST_SYM",
+    "timeframe": "M5",
+    "name": "Integration",
+    "uploaded_at": "2026-05-26 17:38:45",
+    "size": 46
+  },
+  {
+    "id": "e77ede8ba671",
+    "filename": "replay_e77ede8ba671_Integration.html",
+    "symbol": "TEST_SYM",
+    "timeframe": "M5",
+    "name": "Integration",
+    "uploaded_at": "2026-05-26 17:38:39",
+    "size": 46
+  },
+  {
+    "id": "38182f421bb1",
+    "filename": "replay_38182f421bb1_Integration.html",
+    "symbol": "TEST_SYM",
+    "timeframe": "M5",
+    "name": "Integration",
+    "uploaded_at": "2026-05-26 17:38:32",
+    "size": 46
+  },
+  {
+    "id": "a7536de3eee7",
+    "filename": "replay_a7536de3eee7_Integration_Test.html",
+    "symbol": "TEST",
+    "timeframe": "M5",
+    "name": "Integration Test",
+    "uploaded_at": "2026-05-26 17:38:24",
+    "size": 46
+  }
+]

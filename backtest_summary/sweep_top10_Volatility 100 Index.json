@@ -1,0 +1,102 @@
+[
+    {
+        "RR": 6.0,
+        "Threshold": 0.5,
+        "Trades": 957,
+        "Wins": 335,
+        "Losses": 587,
+        "WinRate": 36.33405639913232,
+        "NetProfit": 35575.0,
+        "FinalBalance": 36575.0
+    },
+    {
+        "RR": 5.0,
+        "Threshold": 0.5,
+        "Trades": 957,
+        "Wins": 382,
+        "Losses": 543,
+        "WinRate": 41.2972972972973,
+        "NetProfit": 34175.0,
+        "FinalBalance": 35175.0
+    },
+    {
+        "RR": 4.0,
+        "Threshold": 0.5,
+        "Trades": 957,
+        "Wins": 434,
+        "Losses": 492,
+        "WinRate": 46.868250539956804,
+        "NetProfit": 31100.0,
+        "FinalBalance": 32100.0
+    },
+    {
+        "RR": 6.0,
+        "Threshold": 0.54,
+        "Trades": 681,
+        "Wins": 252,
+        "Losses": 404,
+        "WinRate": 38.41463414634146,
+        "NetProfit": 27700.0,
+        "FinalBalance": 28700.0
+    },
+    {
+        "RR": 3.0,
+        "Threshold": 0.5,
+        "Trades": 957,
+        "Wins": 501,
+        "Losses": 425,
+        "WinRate": 54.1036717062635,
+        "NetProfit": 26950.0,
+        "FinalBalance": 27950.0
+    },
+    {
+        "RR": 5.0,
+        "Threshold": 0.54,
+        "Trades": 681,
+        "Wins": 287,
+        "Losses": 370,
+        "WinRate": 43.68340943683409,
+        "NetProfit": 26625.0,
+        "FinalBalance": 27625.0
+    },
+    {
+        "RR": 4.0,
+        "Threshold": 0.54,
+        "Trades": 681,
+        "Wins": 321,
+        "Losses": 337,
+        "WinRate": 48.78419452887538,
+        "NetProfit": 23675.0,
+        "FinalBalance": 24675.0
+    },
+    {
+        "RR": 6.0,
+        "Threshold": 0.58,
+        "Trades": 436,
+        "Wins": 189,
+        "Losses": 228,
+        "WinRate": 45.32374100719424,
+        "NetProfit": 22650.0,
+        "FinalBalance": 23650.0
+    },
+    {
+        "RR": 2.0,
+        "Threshold": 0.5,
+        "Trades": 957,
+        "Wins": 603,
+        "Losses": 323,
+        "WinRate": 65.11879049676025,
+        "NetProfit": 22075.0,
+        "FinalBalance": 23075.0
+    },
+    {
+        "RR": 5.0,
+        "Threshold": 0.58,
+        "Trades": 436,
+        "Wins": 212,
+        "Losses": 206,
+        "WinRate": 50.717703349282296,
+        "NetProfit": 21350.0,
+        "FinalBalance": 22350.0
+    }
+]

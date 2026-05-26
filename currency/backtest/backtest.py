@@ -196,13 +196,23 @@ def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
         subsequent_highs = high_prices[occurrence_index + 1:]
         subsequent_lows = low_prices[occurrence_index + 1:]
 
-        entry_reached_mask = subsequent_highs >= entry_price
+        is_buy = stop_loss < entry_price
+
+        if is_buy:
+            entry_reached_mask = subsequent_lows <= entry_price
+        else:
+            entry_reached_mask = subsequent_highs >= entry_price
+
         if np.any(entry_reached_mask):
             entry_reached = True
             first_entry_index = np.argmax(entry_reached_mask)
 
-            stop_loss_reached_mask = subsequent_highs[first_entry_index:] >= stop_loss
-            take_profit_reached_mask = subsequent_lows[first_entry_index:] <= take_profit
+            if is_buy:
+                stop_loss_reached_mask = subsequent_lows[first_entry_index:] <= stop_loss
+                take_profit_reached_mask = subsequent_highs[first_entry_index:] >= take_profit
+            else:
+                stop_loss_reached_mask = subsequent_highs[first_entry_index:] >= stop_loss
+                take_profit_reached_mask = subsequent_lows[first_entry_index:] <= take_profit
 
             if np.any(stop_loss_reached_mask):
                 stop_loss_reached_index = np.argmax(stop_loss_reached_mask)
