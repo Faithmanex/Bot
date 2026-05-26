@@ -248,7 +248,7 @@ def analyze_symbol(symbol, live_trading=False, config=None):
     detect_pivot_points(df, symbol)
 
     for strategy_name in strategies:
-        if strategy_name in ["MLPattern", "MLPatternBest"]:
+        if strategy_name == "MLPattern":
             from .modules.ml_pattern import build_and_train_model, MODEL_DIR
             model_path = os.path.join(MODEL_DIR, f"{symbol}_pattern_model.joblib")
             if not os.path.exists(model_path):
@@ -270,6 +270,10 @@ def analyze_symbol(symbol, live_trading=False, config=None):
         )
 
         if not backtest_results_df.empty:
+            # Save detailed trade results for plotting the equity curve in GUI
+            detailed_filename = f"detailed_results_{symbol}.csv"
+            backtest_results_df.to_csv(os.path.join(BACKTEST_SUMMARY_DIR, detailed_filename), index=False)
+            
             final_balance = backtest_results_df.iloc[-1]["Balance"]
             win_rate = (wins / (wins + losses)) * 100 if (wins + losses) > 0 else 0
             summary_results.append({

@@ -1,20 +1,30 @@
-import tkinter as tk
-from tkinter import ttk, scrolledtext
-import threading
+import os
 import sys
+import threading
 from io import StringIO
 from datetime import datetime, timedelta
+import numpy as np
+import pandas as pd
+import tkinter as tk
+from tkinter import ttk, scrolledtext
+
+import matplotlib
+matplotlib.use("TkAgg")
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+
 from currency.unified_trading import main as run_trading_logic
 from currency.modules import trading_pairs
+from currency.settings import BACKTEST_SUMMARY_DIR
 
 class TradingBotGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Echelnet Unified Algorithmic Trading Terminal")
-        self.geometry("1100x700")
+        self.geometry("1150x720")
         self.configure(bg="#121212")
 
-        # Custom Styling & Colors
+        # Premium Dark Palette
         self.colors = {
             "bg": "#121212",
             "card_bg": "#1E1E1E",
@@ -28,130 +38,142 @@ class TradingBotGUI(tk.Tk):
             "border": "#2C2C2C"
         }
 
-        # Apply styles
+        # TTK Style Customizations
         self.style = ttk.Style()
         self.style.theme_use("clam")
         
-        # Configure general styles
+        # Global widget overrides
         self.style.configure(".", background=self.colors["bg"], foreground=self.colors["text"])
         self.style.configure("TFrame", background=self.colors["bg"])
-        self.style.configure("Card.TFrame", background=self.colors["card_bg"], relief="flat", borderwidth=1)
+        self.style.configure("Card.TFrame", background=self.colors["card_bg"], relief="flat", borderwidth=0)
         
-        # Labels
-        self.style.configure("TLabel", background=self.colors["bg"], foreground=self.colors["text"], font=("Segoe UI", 10))
-        self.style.configure("Header.TLabel", font=("Segoe UI", 14, "bold"), foreground=self.colors["accent"])
-        self.style.configure("CardHeader.TLabel", background=self.colors["card_bg"], font=("Segoe UI", 11, "bold"), foreground=self.colors["accent"])
-        self.style.configure("CardLabel.TLabel", background=self.colors["card_bg"], font=("Segoe UI", 9), foreground=self.colors["text"])
+        # Label designs
+        self.style.configure("TLabel", background=self.colors["bg"], foreground=self.colors["text"], font=("Segoe UI", 9))
+        self.style.configure("Header.TLabel", font=("Segoe UI", 13, "bold"), foreground=self.colors["accent"])
+        self.style.configure("CardHeader.TLabel", background=self.colors["card_bg"], font=("Segoe UI", 10, "bold"), foreground=self.colors["accent"])
+        
+        # Tabs Style (Notebook override)
+        self.style.configure("TNotebook", background=self.colors["bg"], borderwidth=0, highlightthickness=0)
+        self.style.configure("TNotebook.Tab", font=("Segoe UI", 9, "bold"), padding=(15, 6), background="#1A1A1A", foreground=self.colors["text_muted"])
+        self.style.map("TNotebook.Tab",
+            background=[("selected", self.colors["card_bg"]), ("active", "#252525")],
+            foreground=[("selected", self.colors["accent"]), ("active", self.colors["text"])]
+        )
 
-        # Custom Buttons
-        self.style.configure("Action.TButton", font=("Segoe UI", 10, "bold"), foreground="#FFFFFF", background=self.colors["accent"], borderwidth=0, padding=8)
+        # Standard Premium Buttons
+        self.style.configure("Action.TButton", font=("Segoe UI", 9, "bold"), foreground="#FFFFFF", background=self.colors["accent"], borderwidth=0, padding=7)
         self.style.map("Action.TButton",
-            background=[("active", self.colors["accent_hover"]), ("disabled", "#444444")],
-            foreground=[("disabled", "#888888")]
+            background=[("active", self.colors["accent_hover"]), ("disabled", "#333333")],
+            foreground=[("disabled", "#666666")]
         )
         
-        self.style.configure("Stop.TButton", font=("Segoe UI", 10, "bold"), foreground="#FFFFFF", background=self.colors["danger"], borderwidth=0, padding=8)
+        self.style.configure("Stop.TButton", font=("Segoe UI", 9, "bold"), foreground="#FFFFFF", background=self.colors["danger"], borderwidth=0, padding=7)
         self.style.map("Stop.TButton",
-            background=[("active", "#FF5252"), ("disabled", "#444444")],
-            foreground=[("disabled", "#888888")]
+            background=[("active", "#FF5252"), ("disabled", "#333333")],
+            foreground=[("disabled", "#666666")]
         )
 
-        # Radio & Combo
+        # Combobox & Radio overrides
         self.style.configure("TRadiobutton", background=self.colors["card_bg"], foreground=self.colors["text"], font=("Segoe UI", 9))
         self.style.configure("TCombobox", fieldbackground="#2A2A2A", background="#2A2A2A", foreground=self.colors["text"], arrowcolor=self.colors["accent"])
 
-        # Main Layout
+        # Grid weights setup
         self.grid_columnconfigure(0, weight=2)
         self.grid_columnconfigure(1, weight=3)
         self.grid_rowconfigure(0, weight=1)
 
-        # Left Panel: Configurations & Controls
+        # Left Column Panel (Controls & Form)
         self.left_panel = ttk.Frame(self, style="TFrame")
         self.left_panel.grid(row=0, column=0, sticky="nsew", padx=15, pady=15)
         self.left_panel.grid_columnconfigure(0, weight=1)
 
         # Title Block
-        self.title_label = ttk.Label(self.left_panel, text="ECHELNET TRADING TERMINAL", style="Header.TLabel")
-        self.title_label.pack(anchor="w", pady=(0, 15))
+        self.title_label = ttk.Label(self.left_panel, text="ECHELNET TRADING ENGINE", style="Header.TLabel")
+        self.title_label.pack(anchor="w", pady=(0, 10))
 
-        # Card 1: Configuration Form
+        # Config Panel Card
         self.config_card = ttk.Frame(self.left_panel, style="Card.TFrame")
-        self.config_card.pack(fill="both", expand=True, pady=(0, 15))
-        
-        # Build Config Form UI
+        self.config_card.pack(fill="both", expand=True, pady=(0, 12))
         self.create_config_form()
 
-        # Card 2: Control Action Block
+        # Operational Controls Card
         self.control_card = ttk.Frame(self.left_panel, style="Card.TFrame")
-        self.control_card.pack(fill="x", pady=(0, 0))
+        self.control_card.pack(fill="x", pady=0)
         self.create_control_block()
 
-        # Right Panel: Live Terminal Output Logs
+        # Right Column Panel (Notebook Tabs for Terminal / Graphic Chart)
         self.right_panel = ttk.Frame(self, style="TFrame")
         self.right_panel.grid(row=0, column=1, sticky="nsew", padx=(0, 15), pady=15)
         self.right_panel.grid_columnconfigure(0, weight=1)
-        self.right_panel.grid_rowconfigure(1, weight=1)
+        self.right_panel.grid_rowconfigure(0, weight=1)
 
-        self.log_header = ttk.Label(self.right_panel, text="LIVE TERMINAL OUTPUT", style="Header.TLabel")
-        self.log_header.grid(row=0, column=0, sticky="w", pady=(0, 10))
+        # Dashboard Tab Controller
+        self.notebook = ttk.Notebook(self.right_panel)
+        self.notebook.grid(row=0, column=0, sticky="nsew")
 
-        # Terminal Console Style Box
+        # Tab 1: Terminal Log Console
+        self.tab_console = ttk.Frame(self.notebook, style="TFrame")
+        self.notebook.add(self.tab_console, text="   LOG TERMINAL   ")
+        self.tab_console.grid_columnconfigure(0, weight=1)
+        self.tab_console.grid_rowconfigure(0, weight=1)
+
         self.log_area = scrolledtext.ScrolledText(
-            self.right_panel, 
+            self.tab_console, 
             wrap=tk.WORD, 
             bg="#0B0B0B", 
             fg="#00FF66", 
             insertbackground="#EEEEEE",
-            font=("Consolas", 10),
-            bd=1,
-            highlightthickness=1,
-            highlightbackground="#2C2C2C",
-            highlightcolor=self.colors["accent"]
+            font=("Consolas", 9),
+            bd=0,
+            highlightthickness=0
         )
-        self.log_area.grid(row=1, column=0, sticky="nsew")
+        self.log_area.grid(row=0, column=0, sticky="nsew")
 
-        # Color Tags for Logs
-        self.log_area.tag_config("TP", foreground=self.colors["success"])
-        self.log_area.tag_config("SL", foreground=self.colors["danger"])
-        self.log_area.tag_config("ERROR", foreground=self.colors["danger"], font=("Consolas", 10, "bold"))
-        self.log_area.tag_config("INFO", foreground=self.colors["accent"])
-        self.log_area.tag_config("WARN", foreground=self.colors["warning"])
+        # Tab 2: Visual Equity Growth Chart
+        self.tab_chart = ttk.Frame(self.notebook, style="TFrame")
+        self.notebook.add(self.tab_chart, text="   EQUITY GRAPH   ")
+        self.tab_chart.grid_columnconfigure(0, weight=1)
+        self.tab_chart.grid_rowconfigure(0, weight=1)
 
-        # Initializing core tracking variables
+        self.chart_frame = tk.Frame(self.tab_chart, bg="#121212")
+        self.chart_frame.grid(row=0, column=0, sticky="nsew")
+        self.chart_frame.grid_columnconfigure(0, weight=1)
+        self.chart_frame.grid_rowconfigure(0, weight=1)
+
+        # Initialize embedded Canvas
+        self.create_placeholder_chart()
+
+        # Core thread states
         self.stop_event = threading.Event()
         self.bot_thread = None
 
     def create_config_form(self):
-        # Card Header
-        lbl = tk.Label(self.config_card, text="STRATEGY CONFIGURATIONS", bg=self.colors["card_bg"], fg=self.colors["accent"], font=("Segoe UI", 11, "bold"))
-        lbl.pack(anchor="w", padx=15, pady=(15, 10))
+        lbl = tk.Label(self.config_card, text="STRATEGY PARAMETERS", bg=self.colors["card_bg"], fg=self.colors["accent"], font=("Segoe UI", 10, "bold"))
+        lbl.pack(anchor="w", padx=15, pady=(12, 8))
 
         form_frame = tk.Frame(self.config_card, bg=self.colors["card_bg"])
-        form_frame.pack(fill="both", expand=True, padx=15, pady=5)
+        form_frame.pack(fill="both", expand=True, padx=15, pady=0)
         form_frame.columnconfigure(1, weight=1)
 
-        # Field Helper Function
         def add_field(row, label_text, var_type="entry", default_val="", options=None):
             lbl_w = tk.Label(form_frame, text=label_text, bg=self.colors["card_bg"], fg=self.colors["text"], font=("Segoe UI", 9))
-            lbl_w.grid(row=row, column=0, sticky="w", pady=6, padx=(0, 10))
+            lbl_w.grid(row=row, column=0, sticky="w", pady=4, padx=(0, 10))
             
             if var_type == "entry":
                 var = tk.StringVar(value=default_val)
                 entry = tk.Entry(form_frame, textvariable=var, bg="#2A2A2A", fg=self.colors["text"], insertbackground=self.colors["text"], bd=0, relief="flat", highlightthickness=1, highlightbackground="#3A3A3A", highlightcolor=self.colors["accent"], font=("Segoe UI", 9))
-                entry.grid(row=row, column=1, sticky="ew", pady=6)
+                entry.grid(row=row, column=1, sticky="ew", pady=4)
                 return var
             elif var_type == "combo":
                 var = tk.StringVar(value=default_val)
                 combo = ttk.Combobox(form_frame, textvariable=var, values=options, state="readonly")
-                combo.grid(row=row, column=1, sticky="ew", pady=6)
+                combo.grid(row=row, column=1, sticky="ew", pady=4)
                 return var
 
-        # Config fields
         default_pairs = ", ".join(trading_pairs.symbols)
         self.var_symbols = add_field(0, "Symbols (comma list):", "entry", default_pairs)
         self.var_timeframe = add_field(1, "Timeframe:", "combo", "M5", ["M1", "M5", "M15", "M30", "H1", "H4", "D1"])
         
-        # Sensible Date Range Picker (Defaulting to recent 2 months to prevent MT5 "Invalid params" / size overload error)
         two_months_ago = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
         self.var_start_date = add_field(2, "Start Date (YYYY-MM-DD):", "entry", two_months_ago)
         self.var_end_date = add_field(3, "End Date (YYYY-MM-DD):", "entry", datetime.now().strftime("%Y-%m-%d"))
@@ -163,36 +185,98 @@ class TradingBotGUI(tk.Tk):
         self.var_rr = add_field(8, "Risk-to-Reward (RR):", "entry", "5.0")
 
     def create_control_block(self):
-        lbl = tk.Label(self.control_card, text="OPERATIONAL CONTROLS", bg=self.colors["card_bg"], fg=self.colors["accent"], font=("Segoe UI", 11, "bold"))
-        lbl.pack(anchor="w", padx=15, pady=(15, 10))
+        lbl = tk.Label(self.control_card, text="OPERATIONAL CONTROLS", bg=self.colors["card_bg"], fg=self.colors["accent"], font=("Segoe UI", 10, "bold"))
+        lbl.pack(anchor="w", padx=15, pady=(12, 8))
 
         btn_frame = tk.Frame(self.control_card, bg=self.colors["card_bg"])
         btn_frame.pack(fill="x", padx=15, pady=(0, 15))
         btn_frame.columnconfigure(0, weight=1)
         btn_frame.columnconfigure(1, weight=1)
 
-        # Mode Selection
         self.mode_var = tk.StringVar(value="backtest")
         
-        rb_backtest = ttk.Radiobutton(btn_frame, text="Run Backtest", variable=self.mode_var, value="backtest")
-        rb_backtest.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
+        rb_backtest = ttk.Radiobutton(btn_frame, text="Run Backtest Simulation", variable=self.mode_var, value="backtest")
+        rb_backtest.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
 
         rb_live = ttk.Radiobutton(btn_frame, text="Execute Live Market Trading", variable=self.mode_var, value="live")
-        rb_live.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 12))
+        rb_live.grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
-        # Start / Stop Buttons
         self.start_button = ttk.Button(btn_frame, text="START BOT ENGINE", command=self.start_bot, style="Action.TButton")
-        self.start_button.grid(row=2, column=0, sticky="ew", padx=(0, 5))
+        self.start_button.grid(row=2, column=0, sticky="ew", padx=(0, 4))
 
         self.stop_button = ttk.Button(btn_frame, text="FORCE SHUTDOWN", command=self.stop_bot, style="Stop.TButton", state="disabled")
-        self.stop_button.grid(row=2, column=1, sticky="ew", padx=(5, 0))
+        self.stop_button.grid(row=2, column=1, sticky="ew", padx=(4, 0))
 
-        # Sweep Optimization Button
         self.sweep_button = ttk.Button(btn_frame, text="RUN HYPER-SWEEP OPTIMIZER", command=self.start_sweep, style="Action.TButton")
-        self.sweep_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self.sweep_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+
+    def create_placeholder_chart(self):
+        # Create gorgeous matching dark themed canvas
+        self.fig = Figure(figsize=(6, 4), dpi=100, facecolor="#121212")
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_facecolor("#121212")
+        
+        self.ax.tick_params(colors="#EEEEEE", labelsize=8)
+        self.ax.spines['bottom'].set_color('#2C2C2C')
+        self.ax.spines['top'].set_color('#2C2C2C')
+        self.ax.spines['left'].set_color('#2C2C2C')
+        self.ax.spines['right'].set_color('#2C2C2C')
+        self.ax.grid(True, color="#222222", linestyle="--")
+        
+        self.ax.set_title("ACCOUNT EQUITY CURVE", color="#00ADB5", fontname="Segoe UI", fontsize=10, weight="bold")
+        self.ax.set_xlabel("Number of Trades", color="#888888", fontname="Segoe UI", fontsize=8)
+        self.ax.set_ylabel("Account Balance ($)", color="#888888", fontname="Segoe UI", fontsize=8)
+        self.ax.plot([], [], color="#00ADB5")
+        
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.chart_frame)
+        self.canvas.draw()
+        self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+
+    def plot_equity_curve(self):
+        symbol = self.var_symbols.get().split(",")[0].strip()
+        detailed_file = os.path.join(BACKTEST_SUMMARY_DIR, f"detailed_results_{symbol}.csv")
+        
+        if not os.path.exists(detailed_file):
+            return
+            
+        try:
+            df_results = pd.read_csv(detailed_file)
+            if df_results.empty or "Balance" not in df_results.columns:
+                return
+                
+            balances = df_results["Balance"].to_numpy()
+            init_bal = float(self.var_balance.get().strip())
+            balances = np.insert(balances, 0, init_bal)
+            
+            # Clear and repaint
+            self.ax.clear()
+            self.ax.set_facecolor("#121212")
+            self.ax.tick_params(colors="#EEEEEE", labelsize=8)
+            self.ax.spines['bottom'].set_color('#2C2C2C')
+            self.ax.spines['top'].set_color('#2C2C2C')
+            self.ax.spines['left'].set_color('#2C2C2C')
+            self.ax.spines['right'].set_color('#2C2C2C')
+            self.ax.grid(True, color="#222222", linestyle="--")
+            
+            self.ax.set_title(f"ACCOUNT EQUITY GROWTH: {symbol}", color="#00ADB5", fontname="Segoe UI", fontsize=10, weight="bold")
+            self.ax.set_xlabel("Number of Trades", color="#888888", fontname="Segoe UI", fontsize=8)
+            self.ax.set_ylabel("Account Balance ($)", color="#888888", fontname="Segoe UI", fontsize=8)
+            
+            # Draw line matching performance: green if winning, red if losing
+            glow_color = self.colors["success"] if balances[-1] >= init_bal else self.colors["danger"]
+            x = np.arange(len(balances))
+            self.ax.plot(x, balances, color=glow_color, linewidth=2)
+            self.ax.fill_between(x, balances, init_bal, color=glow_color, alpha=0.1)
+            
+            self.canvas.draw()
+            
+            # Auto switch tab to show off the visual chart!
+            self.notebook.select(self.tab_chart)
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to render equity curve: {e}")
 
     def start_bot(self):
-        # Validate Inputs
         try:
             start_dt = datetime.strptime(self.var_start_date.get().strip(), "%Y-%m-%d")
             end_dt = datetime.strptime(self.var_end_date.get().strip(), "%Y-%m-%d")
@@ -205,12 +289,12 @@ class TradingBotGUI(tk.Tk):
 
         live_trading = self.mode_var.get() == "live"
         self.start_button.config(state="disabled")
+        self.sweep_button.config(state="disabled")
         self.stop_button.config(state="normal")
         
         self.log_area.delete("1.0", tk.END)
         self.log_message(f"[INFO] Initializing system in {'Live Trading' if live_trading else 'Backtest'} mode...\n", "INFO")
         
-        # Build config dictionary for the bot engine
         config = {
             "symbols": self.var_symbols.get(),
             "timeframe": self.var_timeframe.get(),
@@ -225,16 +309,13 @@ class TradingBotGUI(tk.Tk):
 
         self.stop_event.clear()
         
-        # Stdout Redirection Setup
         self.log_stream = StringIO()
         sys.stdout = self.log_stream
         sys.stderr = self.log_stream
 
-        # Run Engine
+        # Spawn Engine Thread
         self.bot_thread = threading.Thread(target=self.run_bot_logic, args=(live_trading, config), daemon=True)
         self.bot_thread.start()
-        
-        # Start Log Polling Loop
         self.after(100, self.update_logs)
 
     def run_bot_logic(self, live_trading, config):
@@ -245,41 +326,6 @@ class TradingBotGUI(tk.Tk):
         finally:
             sys.stdout = sys.__stdout__
             sys.stderr = sys.__stderr__
-
-    def update_logs(self):
-        log_contents = self.log_stream.getvalue()
-        if log_contents:
-            # Parse lines and apply beautiful tag coloring
-            for line in log_contents.splitlines(keepends=True):
-                tag = None
-                if "SL" in line or "losses" in line:
-                    tag = "SL"
-                elif "TP" in line or "Wins" in line:
-                    tag = "TP"
-                elif "Error" in line or "failed" in line or "Invalid params" in line or "[ERROR]" in line:
-                    tag = "ERROR"
-                elif "Skipping" in line or "Warning" in line:
-                    tag = "WARN"
-                elif "Initializing" in line or "info" in line or "[INFO]" in line:
-                    tag = "INFO"
-                self.log_message(line, tag)
-            
-            # Reset log stream
-            self.log_stream.seek(0)
-            self.log_stream.truncate(0)
-
-        if self.bot_thread and self.bot_thread.is_alive():
-            self.after(100, self.update_logs)
-        else:
-            self.start_button.config(state="normal")
-            self.sweep_button.config(state="normal")
-            self.stop_button.config(state="disabled")
-            self.log_message("\n[INFO] Engine process terminated.\n", "INFO")
-
-    def stop_bot(self):
-        self.stop_event.set()
-        self.log_message("\n[WARN] Shutdown request issued. Halting gracefully...\n", "WARN")
-        self.stop_button.config(state="disabled")
 
     def start_sweep(self):
         symbol = self.var_symbols.get().split(",")[0].strip()
@@ -310,6 +356,43 @@ class TradingBotGUI(tk.Tk):
         finally:
             sys.stdout = sys.__stdout__
             sys.stderr = sys.__stderr__
+
+    def update_logs(self):
+        log_contents = self.log_stream.getvalue()
+        if log_contents:
+            for line in log_contents.splitlines(keepends=True):
+                tag = None
+                if "SL" in line or "losses" in line:
+                    tag = "SL"
+                elif "TP" in line or "Wins" in line:
+                    tag = "TP"
+                elif "Error" in line or "failed" in line or "Invalid params" in line or "[ERROR]" in line:
+                    tag = "ERROR"
+                elif "Skipping" in line or "Warning" in line:
+                    tag = "WARN"
+                elif "Initializing" in line or "info" in line or "[INFO]" in line:
+                    tag = "INFO"
+                self.log_message(line, tag)
+            
+            self.log_stream.seek(0)
+            self.log_stream.truncate(0)
+
+        if self.bot_thread and self.bot_thread.is_alive():
+            self.after(100, self.update_logs)
+        else:
+            self.start_button.config(state="normal")
+            self.sweep_button.config(state="normal")
+            self.stop_button.config(state="disabled")
+            self.log_message("\n[INFO] Engine process terminated.\n", "INFO")
+            
+            # After backtest completes, dynamically render the Equity curve chart!
+            self.notebook.select(self.tab_console)  # Keep console tab focus unless chart renders successfully
+            self.after(200, self.plot_equity_curve)
+
+    def stop_bot(self):
+        self.stop_event.set()
+        self.log_message("\n[WARN] Shutdown request issued. Halting gracefully...\n", "WARN")
+        self.stop_button.config(state="disabled")
 
     def log_message(self, message, tag=None):
         self.log_area.config(state="normal")
