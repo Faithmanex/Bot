@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import threading
 from io import StringIO
 from datetime import datetime, timedelta
@@ -203,6 +204,7 @@ class TradingBotGUI(tk.Tk):
         self.stop_event = threading.Event()
         self.bot_thread = None
         self.backtest_trades = None
+        self.sweep_symbol = None
 
     def create_config_form(self):
         lbl = tk.Label(self.config_card, text="STRATEGY PARAMETERS", bg=self.colors["card_bg"], fg=self.colors["accent"], font=("Segoe UI", 10, "bold"))
@@ -566,6 +568,7 @@ class TradingBotGUI(tk.Tk):
 
     def start_sweep(self):
         symbol = self.var_symbols.get().split(",")[0].strip()
+        self.sweep_symbol = symbol
         self.start_button.config(state="disabled")
         self.sweep_button.config(state="disabled")
         self.stop_button.config(state="normal")
@@ -621,10 +624,15 @@ class TradingBotGUI(tk.Tk):
             self.sweep_button.config(state="normal")
             self.stop_button.config(state="disabled")
             self.log_message("\n[INFO] Engine process terminated.\n", "INFO")
-            
-            # After backtest completes, dynamically render the Equity curve chart!
-            self.notebook.select(self.tab_console)  # Keep console tab focus unless chart renders successfully
-            self.after(200, self.plot_equity_curve)
+
+            if self.sweep_symbol:
+                sym = self.sweep_symbol
+                self.sweep_symbol = None
+                self.after(200, lambda: self.show_sweep_selection(sym))
+            else:
+                # After backtest completes, dynamically render the Equity curve chart!
+                self.notebook.select(self.tab_console)
+                self.after(200, self.plot_equity_curve)
 
     def stop_bot(self):
         self.stop_event.set()
@@ -639,6 +647,130 @@ class TradingBotGUI(tk.Tk):
             self.log_area.insert(tk.END, message)
         self.log_area.config(state="disabled")
         self.log_area.see(tk.END)
+
+    def show_sweep_selection(self, symbol):
+        """Show a styled top-10 sweep result selection dialog."""
+        top10_path = os.path.join(BACKTEST_SUMMARY_DIR, f"sweep_top10_{symbol}.json")
+        if not os.path.exists(top10_path):
+            self.log_message(f"[WARN] No sweep results file found for {symbol}.\n", "WARN")
+            return
+
+        with open(top10_path, "r") as fh:
+            top10 = json.load(fh)
+
+        if not top10:
+            self.log_message("[WARN] Sweep produced no results to select from.\n", "WARN")
+            return
+
+        dlg = tk.Toplevel(self)
+        dlg.title(f"Select Configuration to Save — {symbol}")
+        dlg.configure(bg=self.colors["bg"])
+        dlg.geometry("760x460")
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        # Header
+        hdr = tk.Label(
+            dlg, text=f"HYPER-SWEEP TOP-10 RESULTS  ·  {symbol}",
+            bg=self.colors["bg"], fg=self.colors["accent"],
+            font=("Segoe UI", 11, "bold")
+        )
+        hdr.pack(anchor="w", padx=20, pady=(16, 6))
+
+        sub = tk.Label(
+            dlg, text="Select a configuration and click SAVE to apply it to the MLPattern strategy.",
+            bg=self.colors["bg"], fg=self.colors["text_muted"],
+            font=("Segoe UI", 9)
+        )
+        sub.pack(anchor="w", padx=20, pady=(0, 12))
+
+        # Column headers
+        cols_frame = tk.Frame(dlg, bg="#1A1A1A")
+        cols_frame.pack(fill="x", padx=20)
+        for col, w in [("Rank", 5), ("RR", 10), ("Threshold", 12), ("Trades", 9), ("Wins", 7), ("Losses", 8), ("Win Rate", 10), ("Net Profit", 12)]:
+            tk.Label(
+                cols_frame, text=col,
+                bg="#1A1A1A", fg=self.colors["accent"],
+                font=("Segoe UI", 8, "bold"), width=w, anchor="w"
+            ).pack(side="left", padx=3, pady=6)
+
+        # Listbox
+        lb_frame = tk.Frame(dlg, bg=self.colors["bg"])
+        lb_frame.pack(fill="both", expand=True, padx=20, pady=(2, 0))
+
+        scrollbar = tk.Scrollbar(lb_frame, orient="vertical")
+        scrollbar.pack(side="right", fill="y")
+
+        lb = tk.Listbox(
+            lb_frame,
+            yscrollcommand=scrollbar.set,
+            bg="#1E1E1E",
+            fg=self.colors["text"],
+            selectbackground=self.colors["accent"],
+            selectforeground="#FFFFFF",
+            activestyle="none",
+            font=("Consolas", 9),
+            bd=0,
+            highlightthickness=0,
+            relief="flat",
+        )
+        lb.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=lb.yview)
+
+        for i, r in enumerate(top10):
+            profit_sign = "+" if r["NetProfit"] >= 0 else ""
+            row_text = (
+                f"  #{i+1:<4}  "
+                f"RR {r['RR']:.1f}:1{'':<6}"
+                f"Thr {r['Threshold']*100:.0f}%{'':<6}"
+                f"Trades {int(r['Trades']):<6}"
+                f"W {int(r['Wins']):<5}"
+                f"L {int(r['Losses']):<5}"
+                f"WR {r['WinRate']:.1f}%{'':<5}"
+                f"Profit {profit_sign}${r['NetProfit']:,.2f}"
+            )
+            lb.insert(tk.END, row_text)
+            if i == 0:
+                lb.itemconfig(i, fg=self.colors["success"])
+
+        lb.select_set(0)
+
+        # Status label
+        status_lbl = tk.Label(
+            dlg, text="",
+            bg=self.colors["bg"], fg=self.colors["success"],
+            font=("Segoe UI", 9, "bold")
+        )
+        status_lbl.pack(pady=(8, 0))
+
+        # Buttons
+        btn_frame = tk.Frame(dlg, bg=self.colors["bg"])
+        btn_frame.pack(pady=(4, 16))
+
+        def on_save():
+            sel = lb.curselection()
+            if not sel:
+                status_lbl.config(text="Select a row first.", fg=self.colors["warning"])
+                return
+            chosen = top10[sel[0]]
+            from currency.find_best_pattern import save_sweep_result
+            ok, msg = save_sweep_result(symbol, chosen)
+            if ok:
+                status_lbl.config(
+                    text=f"✓ Saved  {msg}  for {symbol}  —  switch Strategy to MLPattern and run.",
+                    fg=self.colors["success"]
+                )
+                save_btn.config(state="disabled")
+                self.log_message(
+                    f"[INFO] Sweep config saved for {symbol}: {msg}\n", "INFO"
+                )
+            else:
+                status_lbl.config(text=f"✗ Save failed: {msg}", fg=self.colors["danger"])
+
+        save_btn = ttk.Button(btn_frame, text="SAVE SELECTED CONFIG", command=on_save, style="Action.TButton")
+        save_btn.pack(side="left", padx=(0, 10), ipadx=10)
+
+        ttk.Button(btn_frame, text="CLOSE", command=dlg.destroy, style="Stop.TButton").pack(side="left", ipadx=10)
 
 if __name__ == "__main__":
     app = TradingBotGUI()

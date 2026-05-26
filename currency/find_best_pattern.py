@@ -8,7 +8,7 @@ import MetaTrader5 as mt5
 
 from .modules.strategy import Strategy
 from .modules.ml_pattern import build_and_train_model, MODEL_DIR
-from .settings import load_settings, HISTORY_DATA_DIR
+from .settings import load_settings, HISTORY_DATA_DIR, BACKTEST_SUMMARY_DIR as _BSR
 from .unified_trading import prep_data, clean_data, detect_pivot_points
 
 # Load configurations
@@ -212,36 +212,47 @@ def run_sweep(symbol="EURUSD", timeframe_name="M5"):
     print(f"Sweep completed in {t_duration:.2f} seconds.")
     print("=" * 80)
 
-    if not sorted_df.empty:
-        best = sorted_df.iloc[0]
-        print(f"\n[OPTIMAL SETUP FOUND]:")
-        print(f"  - Risk-to-Reward Ratio (RR): {best['RR']:.1f}")
-        print(f"  - Confidence Threshold: {best['Threshold']*100:.0f}% probability")
-        print(f"  - Expected Win Rate: {best['WinRate']:.1f}%")
-        print(f"  - Expected Net Profit ($1000 start): \033[92m${best['NetProfit']:+,.2f}\033[0m")
-        print(f"\n>>> Set your **Risk-to-Reward** to **{best['RR']:.1f}** in the GUI configurations for optimal results.")
-        
-        # Save to currency/settings.json
-        try:
-            settings_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
-            if os.path.exists(settings_path):
-                with open(settings_path, "r") as file:
-                    current_settings = json.load(file)
-            else:
-                current_settings = {}
-            
-            if symbol not in current_settings:
-                current_settings[symbol] = {}
-                
-            current_settings[symbol]["best_rr"] = float(best["RR"])
-            current_settings[symbol]["best_threshold"] = float(best["Threshold"])
-            
-            with open(settings_path, "w") as file:
-                json.dump(current_settings, file, indent=4)
-            print(f"\n[SUCCESS] Saved optimal parameters (RR={best['RR']:.1f}, Threshold={best['Threshold']*100:.0f}%) to settings.json for {symbol}!")
-        except Exception as e:
-            print(f"\n[ERROR] Failed to save optimal parameters to settings.json: {e}")
+    top10 = sorted_df.head(10).to_dict(orient="records")
+
+    # Persist top-10 so the GUI can offer a selection dialog
+    os.makedirs(_BSR, exist_ok=True)
+    top10_path = os.path.join(_BSR, f"sweep_top10_{symbol}.json")
+    with open(top10_path, "w") as fh:
+        json.dump(top10, fh, indent=4)
+
+    if top10:
+        best = top10[0]
+        print(f"\n[TOP RESULT]: RR {best['RR']:.1f}:1 | Threshold {best['Threshold']*100:.0f}% | "
+              f"Win Rate {best['WinRate']:.1f}% | Net Profit ${best['NetProfit']:+,.2f}")
+
+    print(f"\n[INFO] Top-10 results saved — select your preferred setup in the GUI to save it.")
     print("=" * 80 + "\n")
+
+
+def save_sweep_result(symbol, result):
+    """
+    Persist a chosen sweep result dict to currency/settings.json.
+    result must contain keys: RR, Threshold.
+    """
+    settings_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+    try:
+        if os.path.exists(settings_path):
+            with open(settings_path, "r") as fh:
+                current_settings = json.load(fh)
+        else:
+            current_settings = {}
+
+        if symbol not in current_settings:
+            current_settings[symbol] = {}
+
+        current_settings[symbol]["best_rr"] = float(result["RR"])
+        current_settings[symbol]["best_threshold"] = float(result["Threshold"])
+
+        with open(settings_path, "w") as fh:
+            json.dump(current_settings, fh, indent=4)
+        return True, f"RR={result['RR']:.1f}, Threshold={result['Threshold']*100:.0f}%"
+    except Exception as exc:
+        return False, str(exc)
 
 
 if __name__ == "__main__":
