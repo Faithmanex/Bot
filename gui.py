@@ -445,70 +445,101 @@ class TradingBotGUI(tk.Tk):
     def plot_selected_trade(self, event=None):
         symbol = self.var_symbols.get().split(",")[0].strip()
         timeframe_name = self.var_timeframe.get()
-        
+
         sel_idx = self.combo_trades.current()
         if sel_idx < 0 or self.backtest_trades is None or self.backtest_trades.empty:
             return
-            
+
         trade = self.backtest_trades.iloc[sel_idx]
         trig_time = pd.to_datetime(trade["Occurrence"])
-        
+
         from currency.settings import HISTORY_DATA_DIR
         filename = os.path.join(HISTORY_DATA_DIR, f"{symbol}_data_{timeframe_name}.csv")
         if not os.path.exists(filename):
             return
-            
+
         try:
             df = pd.read_csv(filename)
             df["time"] = pd.to_datetime(df["time"])
             df.set_index("time", inplace=True)
-            
-            # Casing correction helper
+
             rename_map = {"open": "Open", "high": "High", "low": "Low", "close": "Close", "tick_volume": "Volume"}
             df.rename(columns=rename_map, inplace=True)
-            
-            # Slicing the sub-window (-15, +35 candles) around trigger point
+
+            # Locate trigger candle
             try:
                 trig_loc = df.index.get_loc(trig_time)
             except KeyError:
-                # Find nearest match if exact key isn't present
-                trig_loc = np.abs(df.index - trig_time).argmin()
+                trig_loc = int(np.abs(df.index - trig_time).argmin())
 
-            start_pos = max(0, trig_loc - 15)
-            end_pos = min(len(df), trig_loc + 35)
-            dfpl = df.iloc[start_pos:end_pos].copy()
-            
-            # Reset visual plot
-            self.pattern_ax.clear()
-            self.pattern_ax.set_facecolor("#121212")
-            
-            # Plot Candlesticks using native mpf inside embedded ax
-            mpf.plot(
+            start_pos = max(0, trig_loc - 20)
+            end_pos   = min(len(df), trig_loc + 40)
+            dfpl = df.iloc[start_pos:end_pos][["Open", "High", "Low", "Close", "Volume"]].copy()
+
+            entry = float(trade["Entry"])
+            sl    = float(trade["Stop_Loss"])
+            tp    = float(trade["Take_Profit"])
+
+            # Custom dark style matching the app palette
+            mc = mpf.make_marketcolors(
+                up="#00E676", down="#FF1744",
+                edge="inherit", wick="inherit", volume="inherit"
+            )
+            style = mpf.make_mpf_style(
+                marketcolors=mc,
+                facecolor="#121212",
+                edgecolor="#2C2C2C",
+                figcolor="#121212",
+                gridcolor="#222222",
+                gridstyle="--",
+                rc={
+                    "axes.labelcolor": "#888888",
+                    "xtick.color": "#EEEEEE",
+                    "ytick.color": "#EEEEEE",
+                    "axes.titlecolor": "#00ADB5",
+                }
+            )
+
+            # Build figure using returnfig so mplfinance owns the datetime x-axis
+            # vlines/hlines use the same datetime index mplfinance plots — no positioning bug
+            fig, axes = mpf.plot(
                 dfpl,
                 type="candle",
-                ax=self.pattern_ax,
-                style="charles",
-                warn_too_much_data=999999
+                style=style,
+                title=f"\nPATTERN INSPECTOR \u00b7 {symbol}  ({trade['Result']})",
+                warn_too_much_data=999999,
+                vlines=dict(
+                    vlines=[trig_time],
+                    colors=["#FFD600"],
+                    linewidths=[2],
+                    linestyle="dotted",
+                ),
+                hlines=dict(
+                    hlines=[sl, entry, tp],
+                    colors=["#FF1744", "#00B0FF", "#00E676"],
+                    linewidths=[1.5, 1.5, 1.5],
+                    linestyle="dashed",
+                ),
+                returnfig=True,
+                figsize=(8, 4.5),
             )
-            
-            # Draw Horizontal Price lines
-            entry = float(trade["Entry"])
-            sl = float(trade["Stop_Loss"])
-            tp = float(trade["Take_Profit"])
-            
-            self.pattern_ax.axhline(entry, color="#00B0FF", linestyle="--", linewidth=1.5, label=f"Entry: {entry:.5f}")
-            self.pattern_ax.axhline(sl, color="#FF1744", linestyle="--", linewidth=1.5, label=f"SL: {sl:.5f}")
-            self.pattern_ax.axhline(tp, color="#00E676", linestyle="--", linewidth=1.5, label=f"TP: {tp:.5f}")
-            
-            # Draw Vertical Trigger marker
-            self.pattern_ax.axvline(dfpl.index[min(len(dfpl)-1, max(0, trig_loc - start_pos))], color="#FFD600", linestyle=":", linewidth=2, label="Setup Trigger")
-            
-            # Display Stylized Legend and titles
-            self.pattern_ax.legend(facecolor="#1E1E1E", edgecolor="#2C2C2C", labelcolor="#EEEEEE", loc="best", fontsize=8)
-            self.pattern_ax.set_title(f"PATTERN GRAPH INSPECTOR: {symbol} ({trade['Result']})", color="#00ADB5", fontname="Segoe UI", fontsize=10, weight="bold")
-            
+
+            fig.patch.set_facecolor("#121212")
+
+            # Legend annotation
+            ax0 = axes[0]
+            ax0.annotate(f"SL  {sl:.5f}",   xy=(1, sl),    xycoords=("axes fraction", "data"), color="#FF1744", fontsize=7, ha="right", va="bottom")
+            ax0.annotate(f"Entry  {entry:.5f}", xy=(1, entry), xycoords=("axes fraction", "data"), color="#00B0FF", fontsize=7, ha="right", va="bottom")
+            ax0.annotate(f"TP  {tp:.5f}",    xy=(1, tp),    xycoords=("axes fraction", "data"), color="#00E676", fontsize=7, ha="right", va="bottom")
+
+            # Destroy old canvas and embed the new figure
+            for widget in self.pattern_chart_frame.winfo_children():
+                widget.destroy()
+
+            self.pattern_canvas = FigureCanvasTkAgg(fig, master=self.pattern_chart_frame)
             self.pattern_canvas.draw()
-            
+            self.pattern_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+
         except Exception as e:
             print(f"[ERROR] Failed to draw trade setup chart: {e}")
 
