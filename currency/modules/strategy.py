@@ -211,20 +211,30 @@ class Strategy:
         
         sequences, trigger_indices, is_buy_list = get_all_pivot_sequences(self.new_df)
         symbol = self.symbol if self.symbol else "EURUSD"
-        print(f"[INFO] Evaluating {len(sequences)} swing patterns using ML model for {symbol}...")
+        
+        # Load optimized hyperparameters from settings.json if available
+        threshold = 0.58
+        rr = RR
+        try:
+            from ..settings import load_settings
+            sym_settings = load_settings().get(symbol, {})
+            if "best_threshold" in sym_settings:
+                threshold = sym_settings["best_threshold"]
+            if "best_rr" in sym_settings:
+                rr = sym_settings["best_rr"]
+        except Exception:
+            pass
+
+        print(f"[INFO] Evaluating {len(sequences)} swing patterns using ML model for {symbol} (RR={rr:.1f}, Confidence Threshold={threshold*100:.0f}%)...")
         
         occurences = []
         entries = []
         stop_losses = []
         take_profits = []
 
-        total_pats = len(sequences)
-        for idx, (seq, trig_time, is_buy) in enumerate(zip(sequences, trigger_indices, is_buy_list)):
-            if total_pats > 0 and ((idx + 1) % max(1, total_pats // 10) == 0 or (idx + 1) == total_pats):
-                print(f"[INFO] Evaluating patterns: {idx + 1}/{total_pats} ({(idx + 1)/total_pats*100:.1f}%)")
-            
+        for seq, trig_time, is_buy in zip(sequences, trigger_indices, is_buy_list):
             prob = predict_pattern_probability(symbol, seq)
-            if prob >= 0.58:  # Trigger on high probability predictions
+            if prob >= threshold:  # Trigger on optimized probability threshold
                 entry_price = seq[0]["val"]
                 wave_size = abs(seq[1]["val"] - seq[2]["val"])
                 if wave_size == 0:
@@ -232,61 +242,10 @@ class Strategy:
 
                 if is_buy:
                     stop_loss = entry_price - (wave_size * 0.5)
-                    take_profit = entry_price + (entry_price - stop_loss) * RR
+                    take_profit = entry_price + (entry_price - stop_loss) * rr
                 else:
                     stop_loss = entry_price + (wave_size * 0.5)
-                    take_profit = entry_price - (stop_loss - entry_price) * RR
-
-                occurences.append(trig_time)
-                entries.append(entry_price)
-                stop_losses.append(stop_loss)
-                take_profits.append(take_profit)
-
-        plot_df = pd.DataFrame({
-            "Occurence": occurences,
-            "Entry": entries,
-            "Stop_Loss": stop_losses,
-            "Take_Profit": take_profits,
-        })
-        if not plot_df.empty:
-            plot_df["Risk_to_Reward_Ratio"] = (plot_df["Take_Profit"] - plot_df["Entry"]) / (
-                plot_df["Entry"] - plot_df["Stop_Loss"]
-            )
-        else:
-            plot_df["Risk_to_Reward_Ratio"] = pd.Series(dtype='float64')
-
-        return plot_df
-
-    def MLPatternBest(self, RR):
-        from .ml_pattern import get_all_pivot_sequences, predict_pattern_probability
-        
-        sequences, trigger_indices, is_buy_list = get_all_pivot_sequences(self.new_df)
-        symbol = self.symbol if self.symbol else "EURUSD"
-        print(f"[INFO] Evaluating {len(sequences)} swing patterns using MLPatternBest (RR={RR:.1f}) for {symbol}...")
-        
-        occurences = []
-        entries = []
-        stop_losses = []
-        take_profits = []
-
-        total_pats = len(sequences)
-        for idx, (seq, trig_time, is_buy) in enumerate(zip(sequences, trigger_indices, is_buy_list)):
-            if total_pats > 0 and ((idx + 1) % max(1, total_pats // 10) == 0 or (idx + 1) == total_pats):
-                print(f"[INFO] Evaluating patterns: {idx + 1}/{total_pats} ({(idx + 1)/total_pats*100:.1f}%)")
-            
-            prob = predict_pattern_probability(symbol, seq)
-            if prob >= 0.50:  # Optimal confidence threshold (50%) found in hyper-sweep
-                entry_price = seq[0]["val"]
-                wave_size = abs(seq[1]["val"] - seq[2]["val"])
-                if wave_size == 0:
-                    wave_size = 1e-4
-
-                if is_buy:
-                    stop_loss = entry_price - (wave_size * 0.5)
-                    take_profit = entry_price + (entry_price - stop_loss) * RR
-                else:
-                    stop_loss = entry_price + (wave_size * 0.5)
-                    take_profit = entry_price - (stop_loss - entry_price) * RR
+                    take_profit = entry_price - (stop_loss - entry_price) * rr
 
                 occurences.append(trig_time)
                 entries.append(entry_price)

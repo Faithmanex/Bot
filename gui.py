@@ -156,7 +156,7 @@ class TradingBotGUI(tk.Tk):
         self.var_start_date = add_field(2, "Start Date (YYYY-MM-DD):", "entry", two_months_ago)
         self.var_end_date = add_field(3, "End Date (YYYY-MM-DD):", "entry", datetime.now().strftime("%Y-%m-%d"))
         
-        self.var_strategy = add_field(4, "Strategy Model:", "combo", "Noir", ["Noir", "BreakerBlock", "DoubleTop", "TripleTop", "MLPattern", "MLPatternBest"])
+        self.var_strategy = add_field(4, "Strategy Model:", "combo", "Noir", ["Noir", "BreakerBlock", "DoubleTop", "TripleTop", "MLPattern"])
         self.var_balance = add_field(5, "Initial Balance ($):", "entry", "1000.0")
         self.var_risk_amount = add_field(6, "Risk Value:", "entry", "25.0")
         self.var_risk_type = add_field(7, "Risk Metric Type:", "combo", "fixed", ["fixed", "percentage"])
@@ -186,6 +186,10 @@ class TradingBotGUI(tk.Tk):
 
         self.stop_button = ttk.Button(btn_frame, text="FORCE SHUTDOWN", command=self.stop_bot, style="Stop.TButton", state="disabled")
         self.stop_button.grid(row=2, column=1, sticky="ew", padx=(5, 0))
+
+        # Sweep Optimization Button
+        self.sweep_button = ttk.Button(btn_frame, text="RUN HYPER-SWEEP OPTIMIZER", command=self.start_sweep, style="Action.TButton")
+        self.sweep_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
 
     def start_bot(self):
         # Validate Inputs
@@ -268,6 +272,7 @@ class TradingBotGUI(tk.Tk):
             self.after(100, self.update_logs)
         else:
             self.start_button.config(state="normal")
+            self.sweep_button.config(state="normal")
             self.stop_button.config(state="disabled")
             self.log_message("\n[INFO] Engine process terminated.\n", "INFO")
 
@@ -275,6 +280,36 @@ class TradingBotGUI(tk.Tk):
         self.stop_event.set()
         self.log_message("\n[WARN] Shutdown request issued. Halting gracefully...\n", "WARN")
         self.stop_button.config(state="disabled")
+
+    def start_sweep(self):
+        symbol = self.var_symbols.get().split(",")[0].strip()
+        self.start_button.config(state="disabled")
+        self.sweep_button.config(state="disabled")
+        self.stop_button.config(state="normal")
+        
+        self.log_area.delete("1.0", tk.END)
+        self.log_message(f"[INFO] Initializing hyper-sweep parameter optimizer for {symbol}...\n", "INFO")
+        self.log_message("[INFO] Model loading has been fully cached. Scan will be extremely rapid.\n", "INFO")
+        
+        self.stop_event.clear()
+        
+        self.log_stream = StringIO()
+        sys.stdout = self.log_stream
+        sys.stderr = self.log_stream
+
+        self.bot_thread = threading.Thread(target=self.run_sweep_logic, args=(symbol,), daemon=True)
+        self.bot_thread.start()
+        self.after(100, self.update_logs)
+
+    def run_sweep_logic(self, symbol):
+        try:
+            from currency.find_best_pattern import run_sweep
+            run_sweep(symbol=symbol)
+        except Exception as e:
+            self.log_message(f"\n[ERROR] Sweep thread execution failed: {e}\n", "ERROR")
+        finally:
+            sys.stdout = sys.__stdout__
+            sys.stderr = sys.__stderr__
 
     def log_message(self, message, tag=None):
         self.log_area.config(state="normal")
