@@ -1010,12 +1010,22 @@ class TradingBotGUI(tk.Tk):
         )
         self.replay_detail_lbl.pack(pady=(4, 20))
 
+        btn_row = tk.Frame(card, bg="#1A1A1A")
+        btn_row.pack(pady=(0, 20))
+
         self.btn_launch_replay = ttk.Button(
-            card, text="  🚀  LAUNCH REPLAY IN BROWSER  ",
+            btn_row, text="  🚀  LAUNCH REPLAY IN BROWSER  ",
             command=self._launch_replay, style="Action.TButton"
         )
-        self.btn_launch_replay.pack(ipadx=16, ipady=6, pady=(0, 20))
+        self.btn_launch_replay.pack(side="left", padx=(0, 6), ipadx=16, ipady=6)
         self.btn_launch_replay.config(state="disabled")
+
+        self.btn_share = ttk.Button(
+            btn_row, text="  📤  SHARE REPLAY  ",
+            command=self._export_btshare, style="Action.TButton"
+        )
+        self.btn_share.pack(side="left", padx=(6, 0), ipadx=16, ipady=6)
+        self.btn_share.config(state="disabled")
 
         # ── Feature grid ──────────────────────────────────────────────────────
         feat_frame = tk.Frame(container, bg="#0D0D0D")
@@ -1074,6 +1084,7 @@ class TradingBotGUI(tk.Tk):
                 fg=self.colors["text_muted"]
             )
             self.btn_launch_replay.config(state="normal")
+            self.btn_share.config(state="normal")
             self.log_message(
                 f"[INFO] Live Replay ready for {symbol} — click LAUNCH REPLAY in the Live Replay tab.\n",
                 "INFO"
@@ -1742,6 +1753,114 @@ updMetrics();
             self.log_message("[WARN] No replay file found — run a backtest first.\n", "WARN")
             return
         webbrowser.open(f"file:///{self.replay_html_path.replace(os.sep, '/')}")
+
+    def _export_btshare(self):
+        import pandas as _pd
+        import json as _json
+        from datetime import datetime as _dt
+
+        if not self.replay_html_path:
+            self.log_message("[WARN] No replay data to share.\n", "WARN")
+            return
+
+        fname = os.path.basename(self.replay_html_path)
+        symbol = None
+        timeframe_name = None
+        for tf in ["M1","M5","M10","M15","M30","H1","H4","D1"]:
+            if fname.endswith(f"_{tf}.html"):
+                symbol_base = fname.replace("live_replay_", "").replace(f"_{tf}.html", "")
+                symbol = symbol_base
+                timeframe_name = tf
+                break
+
+        if not symbol or not timeframe_name:
+            self.log_message("[WARN] Could not determine symbol/timeframe.\n", "WARN")
+            return
+
+        from currency.settings import HISTORY_DATA_DIR, BACKTEST_SUMMARY_DIR as _BSD
+        price_file  = os.path.join(HISTORY_DATA_DIR, f"{symbol}_data_{timeframe_name}.csv")
+        trades_file = os.path.join(_BSD, f"detailed_results_{symbol}.csv")
+
+        if not os.path.exists(price_file) or not os.path.exists(trades_file):
+            self.log_message("[WARN] Source data files not found.\n", "WARN")
+            return
+
+        try:
+            price_df = _pd.read_csv(price_file)
+            price_df["time"] = _pd.to_datetime(price_df["time"])
+            rename = {"open": "Open", "high": "High", "low": "Low",
+                      "close": "Close", "tick_volume": "Volume"}
+            price_df.rename(columns=rename, inplace=True)
+
+            sample_price = price_df["Close"].iloc[0]
+            decimals = len(str(sample_price).split(".")[1]) if "." in str(sample_price) else 5
+            point_size = 10 ** (-decimals)
+
+            candles = []
+            for _, row in price_df.iterrows():
+                ts = int(row["time"].timestamp())
+                c_val = round(float(row["Close"]), 6)
+                spread_val = float(row.get("spread", 0))
+                ask_val = round(c_val + (spread_val * point_size), 6)
+                candles.append({
+                    "time": ts, "open": round(float(row["Open"]), 6),
+                    "high": round(float(row["High"]), 6),
+                    "low": round(float(row["Low"]), 6),
+                    "close": c_val, "ask": ask_val,
+                })
+
+            trades_df = _pd.read_csv(trades_file)
+            trades_df["Occurrence"] = _pd.to_datetime(trades_df["Occurrence"])
+            trades_df = (trades_df[trades_df["Result"].isin(["TP", "SL"])]
+                         .sort_values("Occurrence").reset_index(drop=True))
+
+            trades = []
+            for _, row in trades_df.iterrows():
+                ts = int(row["Occurrence"].timestamp())
+                entry = round(float(row["Entry"]), 6)
+                sl = round(float(row["Stop_Loss"]), 6)
+                tp = round(float(row["Take_Profit"]), 6)
+                trades.append({
+                    "time": ts, "entry": entry, "sl": sl, "tp": tp,
+                    "result": str(row["Result"]),
+                    "balance": round(float(row["Balance"]), 2),
+                    "type": "buy" if sl < entry else "sell",
+                })
+
+            try:
+                init_balance = float(self.var_balance.get())
+            except (ValueError, AttributeError):
+                init_balance = 1000.0
+
+            payload = {
+                "version": 1,
+                "meta": {
+                    "symbol": symbol, "timeframe": timeframe_name,
+                    "created_at": _dt.now().isoformat(),
+                    "initial_balance": round(init_balance, 2),
+                },
+                "candles": candles, "trades": trades,
+            }
+
+            share_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "share_exports")
+            os.makedirs(share_dir, exist_ok=True)
+            share_path = os.path.join(
+                share_dir,
+                f"{symbol}_{timeframe_name}_{_dt.now().strftime('%Y%m%d_%H%M%S')}.btshare"
+            )
+            with open(share_path, "w") as f:
+                _json.dump(payload, f)
+
+            import subprocess
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(share_path)])
+
+            self.log_message(
+                f"[INFO] Share file exported: {share_path}\n"
+                f"       Viewer: https://share-pi-ochre.vercel.app\n",
+                "INFO"
+            )
+        except Exception as exc:
+            self.log_message(f"[ERROR] Failed to export share file: {exc}\n", "WARN")
 
     # ─────────────────────────────────────────────────────────────────────────
     # ML TRAINING TAB
