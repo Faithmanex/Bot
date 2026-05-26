@@ -9,7 +9,9 @@
     "GBPUSD": {
         "polyorder": 6,
         "window_length": 7,
-        "order": 5
+        "order": 5,
+        "best_rr": 5.0,
+        "best_threshold": 0.58
     },
     "Volatility 10 Index": {
         "best_rr": 6.0,
