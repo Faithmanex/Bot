@@ -35,9 +35,19 @@ def shutdown_mt5():
 
 
 def get_historical_data(symbol, timeframe, timeframe_name, start, end):
-    rates = mt5.copy_rates_range(symbol, timeframe, start, end)
+    rates = None
+    try:
+        rates = mt5.copy_rates_range(symbol, timeframe, start, end)
+    except Exception:
+        pass
+
     if rates is None or len(rates) == 0:
-        print(f"No data retrieved for {symbol}, error code = {mt5.last_error()}")
+        # Check if local CSV file already exists for offline/no-internet mode
+        filename = os.path.join(HISTORY_DATA_DIR, f"{symbol}_data_{timeframe_name}.csv")
+        if os.path.exists(filename):
+            print(f"[INFO] MT5 copy_rates failed (possible offline mode). Falling back to local CSV for {symbol}.")
+            return True
+        print(f"No data retrieved for {symbol}, error code = {mt5.last_error() if hasattr(mt5, 'last_error') else 'N/A'}")
         return False
     df = pd.DataFrame(rates)
     df["time"] = pd.to_datetime(df["time"], unit="s")
@@ -108,23 +118,69 @@ def _get_pending_entry_prices(symbol):
     return {o.price_open for o in orders}
 
 
+def get_symbol_min_stop_distance(symbol, sample_price=None):
+    """
+    Get the minimum stop loss/take profit distance in price for the symbol.
+    Queries MT5 if online, else falls back to dynamic precision decimals calculation.
+    """
+    try:
+        symbol_info = mt5.symbol_info(symbol)
+        if symbol_info is not None:
+            stops_level = symbol_info.trade_stops_level
+            point = symbol_info.point
+            return stops_level * point
+    except Exception:
+        pass
+        
+    if sample_price is not None:
+        try:
+            decimals = len(str(sample_price).split(".")[1]) if "." in str(sample_price) else 5
+            point = 10 ** (-decimals)
+            return 10 * point  # safe conservative default of 10 points
+        except Exception:
+            pass
+            
+    return 0.0
+
+
 def run_strategy(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol, live_trading=False):
-    balance = mt5.account_info().balance if live_trading else initial_balance
+    # Try querying account info. If MT5 is offline/uninitialized, fall back to initial_balance
+    balance = initial_balance
+    if live_trading:
+        try:
+            balance = mt5.account_info().balance
+        except Exception:
+            pass
+
     wins, losses, neither = 0, 0, 0
     results = []
     balance_history = []
 
-    pending_prices = _get_pending_entry_prices(symbol) if live_trading else set()
+    pending_prices = set()
+    if live_trading:
+        try:
+            pending_prices = _get_pending_entry_prices(symbol)
+        except Exception:
+            pass
 
     high_arr = df["High"].to_numpy()
     low_arr = df["Low"].to_numpy()
     index_arr = df.index
+
+    sample_price = df["Close"].iloc[0] if not df.empty else 1.0
+    min_stop_dist = get_symbol_min_stop_distance(symbol, sample_price=sample_price)
 
     for trade in plot_df.itertuples():
         entry_price = float(trade.Entry)
         stop_loss = float(trade.Stop_Loss)
         take_profit = float(trade.Take_Profit)
         occurrence_time = trade.Occurence
+
+        # Validate stop loss distance to prevent 'invalid stop loss' broker rejections
+        sl_dist = abs(entry_price - stop_loss)
+        if sl_dist < min_stop_dist:
+            print(f"[INFO] Skipping trade for {symbol} at {occurrence_time}: stop loss too close to entry ({sl_dist:.5f} < min {min_stop_dist:.5f})")
+            continue
 
         if live_trading and entry_price in pending_prices:
             continue
@@ -140,7 +196,13 @@ def run_strategy(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbo
         future_low = low_arr[occ_loc + 1:]
         future_index = index_arr[occ_loc + 1:]
 
-        entry_mask = future_high >= entry_price
+        is_buy = stop_loss < entry_price
+
+        if is_buy:
+            entry_mask = future_low <= entry_price
+        else:
+            entry_mask = future_high >= entry_price
+
         if not entry_mask.any():
             neither += 1
             if live_trading:
@@ -159,8 +221,12 @@ def run_strategy(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbo
         post_high = future_high[entry_pos:]
         post_low = future_low[entry_pos:]
 
-        sl_mask = post_high >= stop_loss
-        tp_mask = post_low <= take_profit
+        if is_buy:
+            sl_mask = post_low <= stop_loss
+            tp_mask = post_high >= take_profit
+        else:
+            sl_mask = post_high >= stop_loss
+            tp_mask = post_low <= take_profit
 
         sl_pos = sl_mask.argmax() if sl_mask.any() else len(post_high)
         tp_pos = tp_mask.argmax() if tp_mask.any() else len(post_low)
@@ -188,36 +254,42 @@ def run_strategy(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbo
 
 
 def _place_pending_order(symbol, entry_price, stop_loss, take_profit, risk_amount, risk_type, balance):
-    volume = get_lot_size(
-        risk_amount=risk_amount,
-        stop_loss=stop_loss,
-        account_currency="USD",
-        symbol=symbol,
-        risk_type=risk_type,
-        account_balance=balance,
-        entry_price=entry_price,
-    )
-    if volume is None:
-        print(f"Could not calculate lot size for {symbol} @ {entry_price}. Skipping.")
-        return
+    try:
+        volume = get_lot_size(
+            risk_amount=risk_amount,
+            stop_loss=stop_loss,
+            account_currency="USD",
+            symbol=symbol,
+            risk_type=risk_type,
+            account_balance=balance,
+            entry_price=entry_price,
+        )
+        if volume is None:
+            print(f"Could not calculate lot size for {symbol} @ {entry_price}. Skipping.")
+            return
 
-    request = {
-        "action": mt5.TRADE_ACTION_PENDING,
-        "symbol": symbol,
-        "volume": volume,
-        "type": mt5.ORDER_TYPE_SELL_LIMIT,
-        "price": entry_price,
-        "sl": stop_loss,
-        "tp": take_profit,
-        "deviation": 20,
-        "magic": 0,
-        "comment": "Echelnet Bot",
-        "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
-    }
-    res = mt5.order_send(request)
-    if res.retcode != mt5.TRADE_RETCODE_DONE:
-        print(f"Failed to place order for {symbol} @ {entry_price}: retcode={res.retcode}")
+        request = {
+            "action": mt5.TRADE_ACTION_PENDING,
+            "symbol": symbol,
+            "volume": volume,
+            "type": mt5.ORDER_TYPE_BUY_LIMIT if stop_loss < entry_price else mt5.ORDER_TYPE_SELL_LIMIT,
+            "price": entry_price,
+            "sl": stop_loss,
+            "tp": take_profit,
+            "deviation": 20,
+            "magic": 0,
+            "comment": "Echelnet Bot",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        res = mt5.order_send(request)
+        if res is None:
+            print(f"Failed to place order for {symbol} @ {entry_price}: no response from MT5.")
+            return
+        if res.retcode != mt5.TRADE_RETCODE_DONE:
+            print(f"Failed to place order for {symbol} @ {entry_price}: retcode={res.retcode}")
+    except Exception as e:
+        print(f"[ERROR] Exception during order placement for {symbol} @ {entry_price}: {e}")
 
 
 def analyze_symbol(symbol, live_trading=False, config=None):
@@ -231,6 +303,7 @@ def analyze_symbol(symbol, live_trading=False, config=None):
     tf_map = {
         "M1": mt5.TIMEFRAME_M1,
         "M5": mt5.TIMEFRAME_M5,
+        "M10": mt5.TIMEFRAME_M10,
         "M15": mt5.TIMEFRAME_M15,
         "M30": mt5.TIMEFRAME_M30,
         "H1": mt5.TIMEFRAME_H1,
@@ -261,6 +334,14 @@ def analyze_symbol(symbol, live_trading=False, config=None):
         strategy = Strategy(df, symbol=symbol)
         rr = config.get("rr", 5.0)
         plot_df = getattr(strategy, strategy_name)(RR=rr)
+
+        # Filter allowed setup direction (Both, Buys Only, Sells Only)
+        direction = config.get("direction", "Both")
+        if not plot_df.empty:
+            if direction == "Buys Only":
+                plot_df = plot_df[plot_df["Stop_Loss"] < plot_df["Entry"]].copy()
+            elif direction == "Sells Only":
+                plot_df = plot_df[plot_df["Stop_Loss"] > plot_df["Entry"]].copy()
 
         initial_balance = config.get("initial_balance", 1000.0)
         risk_amount = config.get("risk_amount", 25.0)
@@ -295,7 +376,9 @@ def main(live_trading=False, stop_event=None, config=None):
     os.makedirs(HISTORY_DATA_DIR, exist_ok=True)
     os.makedirs(BACKTEST_SUMMARY_DIR, exist_ok=True)
 
-    if not initialize_mt5():
+    mt5_ok = initialize_mt5()
+    if live_trading and not mt5_ok:
+        print("[ERROR] Cannot run live trading: MetaTrader 5 initialization failed.")
         return
 
     if config is None:
@@ -321,7 +404,8 @@ def main(live_trading=False, stop_event=None, config=None):
             for symbol in symbols_list:
                 analyze_symbol(symbol, live_trading=False, config=config)
     finally:
-        shutdown_mt5()
+        if mt5_ok:
+            shutdown_mt5()
 
 
 if __name__ == "__main__":

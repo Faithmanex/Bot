@@ -207,10 +207,37 @@ class Strategy:
         return plot_df
 
     def MLPattern(self, RR):
-        from .ml_pattern import get_all_pivot_sequences, predict_pattern_probability
+        import pandas as pd
+        from .ml_pattern import (
+            get_all_pivot_sequences, predict_pattern_probability,
+            _load_training_metadata
+        )
         
         sequences, trigger_indices, is_buy_list = get_all_pivot_sequences(self.new_df)
         symbol = self.symbol if self.symbol else "EURUSD"
+
+        # --- Temporal guard: reject sequences whose trigger falls in the training date range ---
+        meta = _load_training_metadata(symbol)
+        if meta and "train_cutoff" in meta:
+            cutoff = pd.Timestamp(meta["train_cutoff"])
+            kept = [(s, t, b) for s, t, b in zip(sequences, trigger_indices, is_buy_list) if t > cutoff]
+            n_rejected = len(sequences) - len(kept)
+            if n_rejected:
+                print(f"[TEMPORAL GUARD] MLPattern({symbol}): Rejected {n_rejected}/{len(sequences)} "
+                      f"sequence(s) whose trigger time is within the training date range "
+                      f"(train_cutoff={meta['train_cutoff']}). Only using sequences after cutoff.")
+            if kept:
+                sequences, trigger_indices, is_buy_list = zip(*kept)
+                sequences = list(sequences)
+                trigger_indices = list(trigger_indices)
+                is_buy_list = list(is_buy_list)
+            else:
+                print(f"[TEMPORAL GUARD] MLPattern({symbol}): No sequences remain outside the "
+                      f"training range. Returning no trades. Train on older data first.")
+                empty_df = pd.DataFrame(
+                    columns=["Occurence", "Entry", "Stop_Loss", "Take_Profit", "Risk_to_Reward_Ratio"]
+                )
+                return empty_df
         
         # Load optimized hyperparameters from settings.json if available
         threshold = 0.58

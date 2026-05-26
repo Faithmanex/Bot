@@ -36,6 +36,7 @@ def run_sweep(symbol="EURUSD", timeframe_name="M5"):
         tf_map = {
             "M1": mt5.TIMEFRAME_M1,
             "M5": mt5.TIMEFRAME_M5,
+            "M10": mt5.TIMEFRAME_M10,
             "M15": mt5.TIMEFRAME_M15,
             "M30": mt5.TIMEFRAME_M30,
             "H1": mt5.TIMEFRAME_H1,
