@@ -76,7 +76,28 @@ class TradingBotGUI(tk.Tk):
 
         # Combobox & Radio overrides
         self.style.configure("TRadiobutton", background=self.colors["card_bg"], foreground=self.colors["text"], font=("Segoe UI", 9))
-        self.style.configure("TCombobox", fieldbackground="#2A2A2A", background="#2A2A2A", foreground=self.colors["text"], arrowcolor=self.colors["accent"])
+        
+        self.style.configure("TCombobox", 
+            fieldbackground="#2A2A2A", 
+            background="#2A2A2A", 
+            foreground=self.colors["text"], 
+            arrowcolor=self.colors["accent"],
+            darkcolor="#1E1E1E",
+            lightcolor="#2C2C2C",
+            bordercolor="#2C2C2C"
+        )
+        self.style.map("TCombobox",
+            fieldbackground=[("readonly", "#2A2A2A"), ("disabled", "#1A1A1A")],
+            foreground=[("readonly", self.colors["text"]), ("disabled", "#666666")],
+            background=[("readonly", "#2A2A2A")]
+        )
+        
+        # Force Combobox pop-up dropdown list colors
+        self.option_add("*TCombobox*Listbox.background", "#2A2A2A")
+        self.option_add("*TCombobox*Listbox.foreground", self.colors["text"])
+        self.option_add("*TCombobox*Listbox.selectBackground", self.colors["accent"])
+        self.option_add("*TCombobox*Listbox.selectForeground", "#FFFFFF")
+        self.option_add("*TCombobox*Listbox.font", ("Segoe UI", 9))
 
         # Grid weights setup
         self.grid_columnconfigure(0, weight=2)
