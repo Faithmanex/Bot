@@ -13,6 +13,8 @@ import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+from matplotlib.patches import Rectangle
+from matplotlib.collections import PatchCollection, LineCollection
 import mplfinance as mpf
 
 from currency.unified_trading import main as run_trading_logic
@@ -205,11 +207,30 @@ class TradingBotGUI(tk.Tk):
         self.create_metrics_dashboard()
         self.create_placeholder_pattern_chart()
 
+        # Tab 4: Live Backtest Replay
+        self.tab_replay = ttk.Frame(self.notebook, style="TFrame")
+        self.notebook.add(self.tab_replay, text="   LIVE REPLAY   ")
+        self._build_replay_tab()
+
         # Core thread states
         self.stop_event = threading.Event()
         self.bot_thread = None
         self.backtest_trades = None
         self.sweep_symbol = None
+
+        # Replay engine state
+        self.replay_price_df  = None
+        self.replay_trades_df = None
+        self.replay_symbol    = ""
+        self.replay_timeframe = ""
+        self.replay_idx       = 0
+        self.replay_trade_ptr = 0
+        self.replay_revealed  = []
+        self.replay_wins      = 0
+        self.replay_losses    = 0
+        self.replay_balance   = 1000.0
+        self.replay_running   = False
+        self.replay_after_id  = None
 
         # Keyboard navigation for Pattern Charts tab
         self.bind("<Left>",  self._navigate_trade)
@@ -694,9 +715,12 @@ class TradingBotGUI(tk.Tk):
                 self.sweep_symbol = None
                 self.after(200, lambda: self.show_sweep_selection(sym))
             else:
-                # After backtest completes, dynamically render the Equity curve chart!
+                # After backtest completes, render equity curve and load replay data
                 self.notebook.select(self.tab_console)
                 self.after(200, self.plot_equity_curve)
+                sym = self.var_symbols.get().split(",")[0].strip()
+                tf  = self.var_timeframe.get()
+                self.after(400, lambda: self.load_replay_data(sym, tf))
 
     def stop_bot(self):
         self.stop_event.set()
@@ -835,6 +859,387 @@ class TradingBotGUI(tk.Tk):
         save_btn.pack(side="left", padx=(0, 10), ipadx=10)
 
         ttk.Button(btn_frame, text="CLOSE", command=dlg.destroy, style="Stop.TButton").pack(side="left", ipadx=10)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # LIVE REPLAY ENGINE
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _build_replay_tab(self):
+        self.tab_replay.grid_columnconfigure(0, weight=3)
+        self.tab_replay.grid_columnconfigure(1, weight=1)
+        self.tab_replay.grid_rowconfigure(0, weight=1)
+        self.tab_replay.grid_rowconfigure(1, weight=0)
+
+        # Candlestick chart area
+        self.replay_chart_frame = tk.Frame(self.tab_replay, bg="#0D0D0D")
+        self.replay_chart_frame.grid(row=0, column=0, sticky="nsew")
+        self.replay_chart_frame.grid_columnconfigure(0, weight=1)
+        self.replay_chart_frame.grid_rowconfigure(0, weight=1)
+
+        # Live stats sidebar
+        self.replay_stats_frame = tk.Frame(
+            self.tab_replay, bg="#1E1E1E", width=220,
+            highlightbackground="#2C2C2C", highlightthickness=1
+        )
+        self.replay_stats_frame.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        self.replay_stats_frame.grid_propagate(False)
+        self._build_replay_stats()
+
+        # Controls bar
+        ctrl = tk.Frame(self.tab_replay, bg="#141414", height=48)
+        ctrl.grid(row=1, column=0, columnspan=2, sticky="ew")
+        ctrl.grid_propagate(False)
+
+        self.btn_replay_reset = ttk.Button(
+            ctrl, text="◀◀  RESET", command=self.reset_replay, style="Stop.TButton"
+        )
+        self.btn_replay_reset.pack(side="left", padx=(12, 6), pady=10)
+
+        self.btn_replay_play = ttk.Button(
+            ctrl, text="▶  PLAY", command=self.toggle_replay, style="Action.TButton"
+        )
+        self.btn_replay_play.pack(side="left", padx=(0, 18), pady=10)
+
+        tk.Label(ctrl, text="Speed:", bg="#141414", fg=self.colors["text_muted"],
+                 font=("Segoe UI", 8)).pack(side="left", padx=(0, 4))
+
+        self.replay_speed_var = tk.IntVar(value=1)
+        for label, val in [("1×", 1), ("5×", 5), ("25×", 25), ("∞", 0)]:
+            tk.Radiobutton(
+                ctrl, text=label, variable=self.replay_speed_var, value=val,
+                bg="#141414", fg=self.colors["text"],
+                selectcolor=self.colors["accent"],
+                activebackground="#141414", activeforeground=self.colors["accent"],
+                font=("Segoe UI", 9, "bold"), indicatoron=False,
+                relief="flat", bd=0, padx=10, pady=5,
+                highlightthickness=0,
+            ).pack(side="left", padx=2, pady=10)
+
+        self.replay_pct_lbl = tk.Label(
+            ctrl, text="0%", bg="#141414", fg=self.colors["accent"],
+            font=("Segoe UI", 9, "bold")
+        )
+        self.replay_pct_lbl.pack(side="right", padx=(0, 4))
+
+        self.replay_progress_lbl = tk.Label(
+            ctrl, text="Candle 0 / 0  ", bg="#141414", fg=self.colors["text_muted"],
+            font=("Segoe UI", 8)
+        )
+        self.replay_progress_lbl.pack(side="right")
+
+        self._init_replay_figure()
+
+    def _init_replay_figure(self):
+        self.replay_fig = Figure(figsize=(8, 4.5), dpi=100, facecolor="#0D0D0D")
+        self.replay_ax  = self.replay_fig.add_subplot(111)
+        self.replay_ax.set_facecolor("#0D0D0D")
+        self.replay_ax.set_title(
+            "LIVE BACKTEST REPLAY  —  run a backtest to load data",
+            color=self.colors["text_muted"], fontsize=9, weight="bold"
+        )
+        for sp in self.replay_ax.spines.values():
+            sp.set_color("#222222")
+        self.replay_ax.tick_params(colors="#555555", labelsize=7)
+        self.replay_ax.grid(True, color="#191919", linestyle="--", linewidth=0.5)
+
+        self.replay_canvas_widget = FigureCanvasTkAgg(self.replay_fig, master=self.replay_chart_frame)
+        self.replay_canvas_widget.draw()
+        self.replay_canvas_widget.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+
+    def _build_replay_stats(self):
+        tk.Label(
+            self.replay_stats_frame, text="LIVE METRICS",
+            bg="#1E1E1E", fg=self.colors["accent"], font=("Segoe UI", 10, "bold")
+        ).pack(anchor="w", padx=15, pady=(15, 10))
+
+        self.replay_metric_widgets = {}
+
+        def add_metric(label_text, key):
+            f = tk.Frame(self.replay_stats_frame, bg="#1E1E1E")
+            f.pack(fill="x", padx=15, pady=6)
+            tk.Label(f, text=label_text, bg="#1E1E1E",
+                     fg=self.colors["text_muted"], font=("Segoe UI", 8)).pack(anchor="w")
+            lbl = tk.Label(f, text="--", bg="#1E1E1E",
+                           fg=self.colors["text"], font=("Segoe UI", 11, "bold"))
+            lbl.pack(anchor="w", pady=(1, 0))
+            self.replay_metric_widgets[key] = lbl
+
+        add_metric("Account Balance", "balance")
+        add_metric("Net Profit / Loss", "profit")
+        add_metric("Wins", "wins")
+        add_metric("Losses", "losses")
+        add_metric("Win Rate", "winrate")
+        add_metric("Last Trade", "last_trade")
+
+    # ── Data Loading ──────────────────────────────────────────────────────────
+
+    def load_replay_data(self, symbol, timeframe_name):
+        from currency.settings import HISTORY_DATA_DIR, BACKTEST_SUMMARY_DIR as BSD
+        price_file  = os.path.join(HISTORY_DATA_DIR, f"{symbol}_data_{timeframe_name}.csv")
+        trades_file = os.path.join(BSD, f"detailed_results_{symbol}.csv")
+
+        if not os.path.exists(price_file) or not os.path.exists(trades_file):
+            return
+
+        price_df = pd.read_csv(price_file)
+        price_df["time"] = pd.to_datetime(price_df["time"])
+        price_df.set_index("time", inplace=True)
+        rename_map = {"open": "Open", "high": "High", "low": "Low",
+                      "close": "Close", "tick_volume": "Volume"}
+        price_df.rename(columns=rename_map, inplace=True)
+        self.replay_price_df = price_df
+
+        trades_df = pd.read_csv(trades_file)
+        trades_df["Occurrence"] = pd.to_datetime(trades_df["Occurrence"])
+        self.replay_trades_df = (
+            trades_df[trades_df["Result"].isin(["TP", "SL"])]
+            .sort_values("Occurrence")
+            .reset_index(drop=True)
+        )
+        self.replay_symbol    = symbol
+        self.replay_timeframe = timeframe_name
+        self.reset_replay(render=True)
+        self.log_message(
+            f"[INFO] Live Replay loaded: {len(self.replay_price_df):,} candles, "
+            f"{len(self.replay_trades_df)} closed trades for {symbol}.\n", "INFO"
+        )
+
+    # ── Playback Controls ─────────────────────────────────────────────────────
+
+    def reset_replay(self, render=False):
+        if self.replay_after_id:
+            self.after_cancel(self.replay_after_id)
+            self.replay_after_id = None
+        self.replay_running   = False
+        self.replay_idx       = 0
+        self.replay_trade_ptr = 0
+        self.replay_revealed  = []
+        self.replay_wins      = 0
+        self.replay_losses    = 0
+        try:
+            self.replay_balance = float(self.var_balance.get())
+        except (ValueError, AttributeError):
+            self.replay_balance = 1000.0
+        self.btn_replay_play.config(text="▶  PLAY")
+        if render and self.replay_price_df is not None:
+            self._render_replay_frame()
+            self._update_replay_stats()
+
+    def toggle_replay(self):
+        if self.replay_price_df is None:
+            self.log_message("[WARN] Run a backtest first to enable live replay.\n", "WARN")
+            return
+        self.replay_running = not self.replay_running
+        if self.replay_running:
+            self.btn_replay_play.config(text="⏸  PAUSE")
+            self._replay_tick()
+        else:
+            self.btn_replay_play.config(text="▶  PLAY")
+            if self.replay_after_id:
+                self.after_cancel(self.replay_after_id)
+                self.replay_after_id = None
+
+    # ── Tick / Step Logic ─────────────────────────────────────────────────────
+
+    def _replay_tick(self):
+        if not self.replay_running or self.replay_price_df is None:
+            return
+
+        total = len(self.replay_price_df)
+        speed = self.replay_speed_var.get()
+
+        if speed == 0:
+            # ∞ mode: jump to the next trade occurrence
+            if self.replay_trade_ptr < len(self.replay_trades_df):
+                next_occ = self.replay_trades_df.iloc[self.replay_trade_ptr]["Occurrence"]
+                loc = self.replay_price_df.index.searchsorted(next_occ)
+                self.replay_idx = min(int(loc), total - 1)
+            else:
+                self.replay_idx = total - 1
+            # Reveal all trades up to this point
+            while self.replay_trade_ptr < len(self.replay_trades_df):
+                t = self.replay_trades_df.iloc[self.replay_trade_ptr]
+                if t["Occurrence"] <= self.replay_price_df.index[self.replay_idx]:
+                    self._reveal_trade(t)
+                    self.replay_trade_ptr += 1
+                else:
+                    break
+        else:
+            for _ in range(speed):
+                if self.replay_idx >= total - 1:
+                    break
+                self.replay_idx += 1
+                self._process_candle(self.replay_idx)
+
+        self._render_replay_frame()
+        self._update_replay_stats()
+
+        if self.replay_idx >= total - 1:
+            self.replay_running = False
+            self.btn_replay_play.config(text="▶  PLAY")
+            return
+
+        delay = {1: 80, 5: 30, 25: 12, 0: 150}.get(speed, 30)
+        self.replay_after_id = self.after(delay, self._replay_tick)
+
+    def _process_candle(self, idx):
+        candle_time = self.replay_price_df.index[idx]
+        while self.replay_trade_ptr < len(self.replay_trades_df):
+            t = self.replay_trades_df.iloc[self.replay_trade_ptr]
+            if t["Occurrence"] <= candle_time:
+                self._reveal_trade(t)
+                self.replay_trade_ptr += 1
+            else:
+                break
+
+    def _reveal_trade(self, trade_row):
+        self.replay_revealed.append(trade_row.to_dict())
+        self.replay_balance = float(trade_row["Balance"])
+        if trade_row["Result"] == "TP":
+            self.replay_wins += 1
+        else:
+            self.replay_losses += 1
+
+    # ── Rendering ─────────────────────────────────────────────────────────────
+
+    def _render_replay_frame(self):
+        if self.replay_price_df is None:
+            return
+
+        WINDOW = 130
+        total   = len(self.replay_price_df)
+        end_idx = self.replay_idx + 1
+        start_idx = max(0, end_idx - WINDOW)
+        df_win = self.replay_price_df.iloc[start_idx:end_idx]
+
+        ax = self.replay_ax
+        ax.clear()
+        ax.set_facecolor("#0D0D0D")
+        for sp in ax.spines.values():
+            sp.set_color("#222222")
+        ax.grid(True, color="#161616", linestyle="--", linewidth=0.4)
+        ax.tick_params(colors="#555555", labelsize=7)
+
+        xs     = np.arange(len(df_win))
+        opens  = df_win["Open"].values
+        highs  = df_win["High"].values
+        lows   = df_win["Low"].values
+        closes = df_win["Close"].values
+        is_up  = closes >= opens
+
+        up_col   = "#00E676"
+        down_col = "#FF1744"
+
+        # Vectorised wicks
+        wick_segs   = [[(x, lows[i]), (x, highs[i])] for i, x in enumerate(xs)]
+        wick_colors = [up_col if is_up[i] else down_col for i in range(len(xs))]
+        ax.add_collection(LineCollection(wick_segs, colors=wick_colors,
+                                         linewidths=0.9, zorder=1))
+
+        # Vectorised bodies
+        bodies       = []
+        body_colors  = []
+        for i, x in enumerate(xs):
+            bot  = min(opens[i], closes[i])
+            h    = max(abs(closes[i] - opens[i]), (highs[i] - lows[i]) * 0.008)
+            bodies.append(Rectangle((x - 0.38, bot), 0.76, h))
+            body_colors.append(up_col if is_up[i] else down_col)
+
+        pc = PatchCollection(bodies, facecolors=body_colors,
+                             edgecolors=body_colors, linewidths=0.3, zorder=2)
+        ax.add_collection(pc)
+
+        # Trade markers and lines for trades visible in this window
+        win_times = df_win.index
+        if len(win_times) == 0:
+            ax.set_xlim(-1, WINDOW)
+            self.replay_canvas_widget.draw()
+            return
+
+        last_visible = None
+        for trade in self.replay_revealed:
+            occ = pd.to_datetime(trade["Occurrence"])
+            if occ < win_times[0] or occ > win_times[-1]:
+                continue
+            pos = int(win_times.searchsorted(occ))
+            pos = min(pos, len(df_win) - 1)
+            result = trade["Result"]
+            if result == "TP":
+                ax.scatter(xs[pos], lows[pos] * 0.9999, marker="^",
+                           color=up_col, s=55, zorder=6)
+            else:
+                ax.scatter(xs[pos], highs[pos] * 1.0001, marker="v",
+                           color=down_col, s=55, zorder=6)
+            last_visible = trade
+
+        # SL / Entry / TP lines for the most recent visible trade
+        if last_visible:
+            entry = float(last_visible["Entry"])
+            sl    = float(last_visible["Stop_Loss"])
+            tp    = float(last_visible["Take_Profit"])
+            ax.axhline(entry, color="#00B0FF", linestyle="--", linewidth=1.0,
+                       alpha=0.65, zorder=3)
+            ax.axhline(sl,    color=down_col,  linestyle="--", linewidth=0.9,
+                       alpha=0.55, zorder=3)
+            ax.axhline(tp,    color=up_col,    linestyle="--", linewidth=0.9,
+                       alpha=0.55, zorder=3)
+
+        ax.set_xlim(-1, WINDOW)
+        ax.autoscale_view(scalex=False)
+
+        # Title with live P&L
+        try:
+            init_bal = float(self.var_balance.get())
+        except (ValueError, AttributeError):
+            init_bal = 1000.0
+        profit = self.replay_balance - init_bal
+        sign   = "+" if profit >= 0 else ""
+        p_col  = up_col if profit >= 0 else down_col
+        ax.set_title(
+            f"LIVE REPLAY  ·  {self.replay_symbol} ({self.replay_timeframe})     "
+            f"Balance: ${self.replay_balance:,.2f}   [{sign}${profit:,.2f}]",
+            color=p_col, fontsize=9, weight="bold", pad=6
+        )
+
+        self.replay_canvas_widget.draw()
+
+        pct = int(end_idx / total * 100) if total > 0 else 0
+        self.replay_progress_lbl.config(text=f"Candle {end_idx:,} / {total:,}  ")
+        self.replay_pct_lbl.config(text=f"{pct}%")
+
+    def _update_replay_stats(self):
+        try:
+            init_bal = float(self.var_balance.get())
+        except (ValueError, AttributeError):
+            init_bal = 1000.0
+
+        profit = self.replay_balance - init_bal
+        total  = self.replay_wins + self.replay_losses
+        wr     = (self.replay_wins / total * 100) if total > 0 else 0.0
+
+        p_text  = f"+${profit:,.2f}" if profit >= 0 else f"-${abs(profit):,.2f}"
+        p_color = self.colors["success"] if profit >= 0 else self.colors["danger"]
+
+        last_text  = "--"
+        last_color = self.colors["text_muted"]
+        if self.replay_revealed:
+            last = self.replay_revealed[-1]
+            last_text  = f"{last['Result']} @ {float(last['Entry']):.5f}"
+            last_color = (self.colors["success"] if last["Result"] == "TP"
+                          else self.colors["danger"])
+
+        self.replay_metric_widgets["balance"].config(
+            text=f"${self.replay_balance:,.2f}", fg=self.colors["text"])
+        self.replay_metric_widgets["profit"].config(text=p_text, fg=p_color)
+        self.replay_metric_widgets["wins"].config(
+            text=str(self.replay_wins), fg=self.colors["success"])
+        self.replay_metric_widgets["losses"].config(
+            text=str(self.replay_losses), fg=self.colors["danger"])
+        self.replay_metric_widgets["winrate"].config(
+            text=f"{wr:.1f}%", fg=self.colors["accent"])
+        self.replay_metric_widgets["last_trade"].config(
+            text=last_text, fg=last_color)
+
 
 if __name__ == "__main__":
     app = TradingBotGUI()
