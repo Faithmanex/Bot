@@ -26,11 +26,13 @@ def load_settings(settings_file="settings.json"):
         "order": 5
     }
 
-    for symbol in symbols:
+    # Merge defaults into every symbol already in the file
+    # (covers sweep-saved symbols not in trading_pairs.symbols)
+    all_symbols = set(symbols) | set(settings.keys())
+    for symbol in all_symbols:
         if symbol not in settings:
             settings[symbol] = default_symbol_settings.copy()
         else:
-            # Merge any missing default keys (e.g. after a sweep-only save)
             for key, val in default_symbol_settings.items():
                 if key not in settings[symbol]:
                     settings[symbol][key] = val

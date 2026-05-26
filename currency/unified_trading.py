@@ -70,9 +70,11 @@ def prep_data(symbol, timeframe_name, visualize=False):
 
 
 def clean_data(df, symbol, visualize=False):
-    sym_cfg = settings.get(symbol, {"polyorder": 2, "window_length": 5})
+    sym_cfg = settings.get(symbol, {})
+    polyorder     = sym_cfg.get("polyorder",     6)
+    window_length = sym_cfg.get("window_length", 7)
     close_prices = df["Close"].to_numpy()
-    smoothed_close = savgol_filter(close_prices, sym_cfg["window_length"], sym_cfg["polyorder"])
+    smoothed_close = savgol_filter(close_prices, window_length, polyorder)
     df["smoothed_close"] = smoothed_close
     if visualize:
         plt.figure(figsize=(10, 5))
@@ -83,7 +85,8 @@ def clean_data(df, symbol, visualize=False):
 
 
 def detect_pivot_points(df, symbol, visualize=False):
-    order = settings.get(symbol, {"order": 5})["order"]
+    sym_cfg = settings.get(symbol, {})
+    order = sym_cfg.get("order", 5)
     smoothed_close = df["smoothed_close"].to_numpy()
     highs = argrelextrema(smoothed_close, np.greater, mode="wrap", order=order)[0]
     lows = argrelextrema(smoothed_close, np.less, mode="wrap", order=order)[0]
