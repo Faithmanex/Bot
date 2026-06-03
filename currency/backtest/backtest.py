@@ -81,11 +81,28 @@ def prep_data(symbol, timeframe_name, visualize=False):
     df = pd.read_csv(filename)
     df["time"] = pd.to_datetime(df["time"])
     df.set_index("time", inplace=True)
-    ohlcv_data = df[["open", "high", "low", "close", "tick_volume"]].to_numpy()
-    ohlcv_df = pd.DataFrame(ohlcv_data, columns=["Open", "High", "Low", "Close", "Volume"], index=df.index)
+    
+    col_map = {col.lower(): col for col in df.columns}
+    open_col = col_map.get("open", "open")
+    high_col = col_map.get("high", "high")
+    low_col = col_map.get("low", "low")
+    close_col = col_map.get("close", "close")
+    vol_col = col_map.get("tick_volume", col_map.get("volume", "tick_volume"))
+    spread_col = col_map.get("spread", "spread")
+    
+    ohlcv_df = pd.DataFrame(index=df.index)
+    ohlcv_df["Open"] = df[open_col]
+    ohlcv_df["High"] = df[high_col]
+    ohlcv_df["Low"] = df[low_col]
+    ohlcv_df["Close"] = df[close_col]
+    ohlcv_df["Volume"] = df[vol_col]
+    if spread_col in df.columns:
+        ohlcv_df["spread"] = df[spread_col]
+    else:
+        ohlcv_df["spread"] = 0.0
     
     if visualize:
-        mpf.plot(ohlcv_df, type="candle", style="line", title=f"{symbol} {timeframe_name}", volume=True)
+        mpf.plot(ohlcv_df[["Open", "High", "Low", "Close", "Volume"]], type="candle", style="line", title=f"{symbol} {timeframe_name}", volume=True)
     
     return ohlcv_df
 
@@ -179,6 +196,15 @@ def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
 
     high_prices = df['High'].values
     low_prices = df['Low'].values
+    
+    import MetaTrader5 as mt5
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        raise RuntimeError(f"[ERROR] Symbol info for {symbol} could not be retrieved from MetaTrader 5. The bot must be fully online.")
+    point_size = info.point
+        
+    raw_spreads = df['spread'].values if 'spread' in df.columns else np.zeros_like(low_prices)
+    spread_prices = raw_spreads * point_size
 
     for idx, entry_price in enumerate(entries):
         stop_loss = stop_losses[idx]
@@ -195,34 +221,39 @@ def backtest(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol):
 
         subsequent_highs = high_prices[occurrence_index + 1:]
         subsequent_lows = low_prices[occurrence_index + 1:]
+        subsequent_spreads = spread_prices[occurrence_index + 1:]
 
         is_buy = stop_loss < entry_price
 
         if is_buy:
-            entry_reached_mask = subsequent_lows <= entry_price
+            entry_reached_mask = (subsequent_lows + subsequent_spreads) <= entry_price
         else:
             entry_reached_mask = subsequent_highs >= entry_price
 
         if np.any(entry_reached_mask):
             entry_reached = True
             first_entry_index = np.argmax(entry_reached_mask)
+            
+            post_highs = subsequent_highs[first_entry_index:]
+            post_lows = subsequent_lows[first_entry_index:]
+            post_spreads = subsequent_spreads[first_entry_index:]
 
             if is_buy:
-                stop_loss_reached_mask = subsequent_lows[first_entry_index:] <= stop_loss
-                take_profit_reached_mask = subsequent_highs[first_entry_index:] >= take_profit
+                stop_loss_reached_mask = post_lows <= stop_loss
+                take_profit_reached_mask = post_highs >= take_profit
             else:
-                stop_loss_reached_mask = subsequent_highs[first_entry_index:] >= stop_loss
-                take_profit_reached_mask = subsequent_lows[first_entry_index:] <= take_profit
+                stop_loss_reached_mask = (post_highs + post_spreads) >= stop_loss
+                take_profit_reached_mask = (post_lows + post_spreads) <= take_profit
 
             if np.any(stop_loss_reached_mask):
                 stop_loss_reached_index = np.argmax(stop_loss_reached_mask)
             else:
-                stop_loss_reached_index = len(subsequent_highs)
+                stop_loss_reached_index = len(post_highs)
 
             if np.any(take_profit_reached_mask):
                 take_profit_reached_index = np.argmax(take_profit_reached_mask)
             else:
-                take_profit_reached_index = len(subsequent_lows)
+                take_profit_reached_index = len(post_lows)
 
             if stop_loss_reached_index < take_profit_reached_index:
                 balance -= Risk
@@ -280,7 +311,7 @@ def plot(trade, df, symbol):
         mpf.make_addplot(dfpl["Is_High"], scatter=True, markersize=30, marker="x", color="b"),
         mpf.make_addplot(dfpl["Is_Low"], scatter=True, markersize=30, marker="x", color="r"),
     ]
-    mpf.plot(
+    fig, axes = mpf.plot(
         dfpl,
         type="candle",
         style="nightclouds",
@@ -289,7 +320,17 @@ def plot(trade, df, symbol):
         addplot=apd,
         vlines=[specific_datetime],
         hlines=dict(hlines=[trade.Stop_Loss, trade.Take_Profit, trade.Entry], colors=['r','g','b'], linestyle='-'),
+        returnfig=True,
     )
+    ax0 = axes[0]
+    import matplotlib.lines as mlines
+    legend_handles = [
+        mlines.Line2D([], [], color="b", linestyle="-", label="Entry Price"),
+        mlines.Line2D([], [], color="r", linestyle="-", label="Stop Loss (SL)"),
+        mlines.Line2D([], [], color="g", linestyle="-", label="Take Profit (TP)"),
+    ]
+    ax0.legend(handles=legend_handles, loc="upper left", fontsize=8)
+    plt.show()
 
 def main():
     # Initialization and setup

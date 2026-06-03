@@ -1,4 +1,5 @@
 {
+    "temporal_guard": false,
     "EURUSD": {
         "polyorder": 8,
         "window_length": 15,
@@ -14,19 +15,47 @@
         "best_threshold": 0.58
     },
     "Volatility 10 Index": {
-        "best_rr": 6.0,
-        "best_threshold": 0.5
+        "best_rr": 5.0,
+        "best_threshold": 0.58
     },
     "Volatility 15 Index": {
         "best_rr": 6.0,
         "best_threshold": 0.5
     },
     "Volatility 100 Index": {
-        "best_rr": 4.0,
+        "best_rr": 3.0,
         "best_threshold": 0.5
     },
     "Volatility": {
         "best_rr": 5.0,
+        "best_threshold": 0.58
+    },
+    "GBPUSD_M5": {
+        "best_rr": 5.0,
+        "best_threshold": 0.58
+    },
+    "GBPUSD_M15": {
+        "best_rr": 5.0,
+        "best_threshold": 0.58
+    },
+    "Volatility 25 Index_M15": {
+        "best_rr": 5.0,
+        "best_threshold": 0.58
+    },
+    "Volatility 25 Index_M5": {
+        "best_rr": 5.0,
+        "best_threshold": 0.58
+    },
+    "EURUSD_M10": {
+        "best_rr": 5.0,
+        "best_threshold": 0.58
+    },
+    "Volatility 100 Index_M5": {
+        "best_rr": 5.0,
+        "best_threshold": 0.5
+    },
+    "Volatility 100 Index_M10": {
+        "best_rr": 4.0,
         "best_threshold": 0.58
     }
 }

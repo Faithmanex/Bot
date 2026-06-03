@@ -20,6 +20,16 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+# Mock MetaTrader5 module completely so tests don't require an active connection
+from unittest.mock import MagicMock
+mock_mt5 = MagicMock()
+mock_symbol_info = MagicMock()
+mock_symbol_info.point = 0.00001
+mock_symbol_info.trade_stops_level = 20
+mock_mt5.symbol_info.return_value = mock_symbol_info
+mock_mt5.initialize.return_value = True
+sys.modules["MetaTrader5"] = mock_mt5
+
 # Import the module under test
 from currency.modules import ml_pattern as ml
 from currency.modules.strategy import Strategy

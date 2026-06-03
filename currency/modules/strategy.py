@@ -2,8 +2,9 @@ import pandas as pd
 import numpy as np
 
 class Strategy:
-    def __init__(self, dataframe, symbol=None):
+    def __init__(self, dataframe, symbol=None, timeframe=None):
         self.symbol = symbol
+        self.timeframe = timeframe
         self.fibonacci_levels = [0, 0.272, 0.382, 0.5, 0.618, 0.786, 1, 1.361, 1.836]
         self.new_df = dataframe.loc[dataframe["Is_High"].notna() | dataframe["Is_Low"].notna()].copy()
 
@@ -216,43 +217,64 @@ class Strategy:
         sequences, trigger_indices, is_buy_list = get_all_pivot_sequences(self.new_df)
         symbol = self.symbol if self.symbol else "EURUSD"
 
-        # --- Temporal guard: reject sequences whose trigger falls in the training date range ---
-        meta = _load_training_metadata(symbol)
-        if meta and "train_cutoff" in meta:
-            cutoff = pd.Timestamp(meta["train_cutoff"])
-            kept = [(s, t, b) for s, t, b in zip(sequences, trigger_indices, is_buy_list) if t > cutoff]
-            n_rejected = len(sequences) - len(kept)
-            if n_rejected:
-                print(f"[TEMPORAL GUARD] MLPattern({symbol}): Rejected {n_rejected}/{len(sequences)} "
-                      f"sequence(s) whose trigger time is within the training date range "
-                      f"(train_cutoff={meta['train_cutoff']}). Only using sequences after cutoff.")
-            if kept:
-                sequences, trigger_indices, is_buy_list = zip(*kept)
-                sequences = list(sequences)
-                trigger_indices = list(trigger_indices)
-                is_buy_list = list(is_buy_list)
-            else:
-                print(f"[TEMPORAL GUARD] MLPattern({symbol}): No sequences remain outside the "
-                      f"training range. Returning no trades. Train on older data first.")
-                empty_df = pd.DataFrame(
-                    columns=["Occurence", "Entry", "Stop_Loss", "Take_Profit", "Risk_to_Reward_Ratio"]
-                )
-                return empty_df
-        
-        # Load optimized hyperparameters from settings.json if available
+        # --- Timeframe Suffix ---
+        timeframe = self.timeframe
+        if timeframe is None and len(self.new_df) >= 2:
+            try:
+                delta = self.new_df.index[1] - self.new_df.index[0]
+                minutes = int(round(delta.total_seconds() / 60))
+                tf_map = {1: "M1", 5: "M5", 10: "M10", 15: "M15", 30: "M30", 60: "H1", 240: "H4", 1440: "D1"}
+                timeframe = tf_map.get(minutes)
+            except Exception:
+                pass
+        model_symbol = f"{symbol}_{timeframe}" if timeframe else symbol
+
+        # Load optimized hyperparameters and temporal guard setting from settings.json if available
         threshold = 0.58
         rr = RR
+        temporal_guard = True
         try:
             from ..settings import load_settings
-            sym_settings = load_settings().get(symbol, {})
+            all_settings = load_settings()
+            sym_settings = all_settings.get(model_symbol, all_settings.get(symbol, {}))
             if "best_threshold" in sym_settings:
                 threshold = sym_settings["best_threshold"]
             if "best_rr" in sym_settings:
                 rr = sym_settings["best_rr"]
+            if "temporal_guard" in sym_settings:
+                temporal_guard = sym_settings["temporal_guard"]
+            elif "temporal_guard" in all_settings:
+                temporal_guard = all_settings["temporal_guard"]
         except Exception:
             pass
 
-        print(f"[INFO] Evaluating {len(sequences)} swing patterns using ML model for {symbol} (RR={rr:.1f}, Confidence Threshold={threshold*100:.0f}%)...")
+        # --- Temporal guard: reject sequences whose trigger falls in the training date range ---
+        if temporal_guard:
+            meta = _load_training_metadata(model_symbol)
+            if meta and "train_cutoff" in meta:
+                cutoff = pd.Timestamp(meta["train_cutoff"])
+                kept = [(s, t, b) for s, t, b in zip(sequences, trigger_indices, is_buy_list) if t > cutoff]
+                n_rejected = len(sequences) - len(kept)
+                if n_rejected:
+                    print(f"[TEMPORAL GUARD] MLPattern({model_symbol}): Rejected {n_rejected}/{len(sequences)} "
+                          f"sequence(s) whose trigger time is within the training date range "
+                          f"(train_cutoff={meta['train_cutoff']}). Only using sequences after cutoff.")
+                if kept:
+                    sequences, trigger_indices, is_buy_list = zip(*kept)
+                    sequences = list(sequences)
+                    trigger_indices = list(trigger_indices)
+                    is_buy_list = list(is_buy_list)
+                else:
+                    print(f"[TEMPORAL GUARD] MLPattern({model_symbol}): No sequences remain outside the "
+                          f"training range. Returning no trades. Train on older data first.")
+                    empty_df = pd.DataFrame(
+                        columns=["Occurence", "Entry", "Stop_Loss", "Take_Profit", "Risk_to_Reward_Ratio"]
+                    )
+                    return empty_df
+        else:
+            print(f"[TEMPORAL GUARD] MLPattern({model_symbol}): Bypassed via settings.json. Evaluating all historical sequences.")
+
+        print(f"[INFO] Evaluating {len(sequences)} swing patterns using ML model for {model_symbol} (RR={rr:.1f}, Confidence Threshold={threshold*100:.0f}%)...")
         
         occurences = []
         entries = []
@@ -260,7 +282,7 @@ class Strategy:
         take_profits = []
 
         for seq, trig_time, is_buy in zip(sequences, trigger_indices, is_buy_list):
-            prob = predict_pattern_probability(symbol, seq)
+            prob = predict_pattern_probability(model_symbol, seq)
             if prob >= threshold:  # Trigger on optimized probability threshold
                 entry_price = seq[0]["val"]
                 wave_size = abs(seq[1]["val"] - seq[2]["val"])

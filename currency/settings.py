@@ -32,7 +32,7 @@ def load_settings(settings_file="settings.json"):
     for symbol in all_symbols:
         if symbol not in settings:
             settings[symbol] = default_symbol_settings.copy()
-        else:
+        elif isinstance(settings[symbol], dict):
             for key, val in default_symbol_settings.items():
                 if key not in settings[symbol]:
                     settings[symbol][key] = val

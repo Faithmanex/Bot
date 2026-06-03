@@ -300,8 +300,11 @@ class TradingBotGUI(tk.Tk):
         self.stop_button = ttk.Button(btn_frame, text="FORCE SHUTDOWN", command=self.stop_bot, style="Stop.TButton", state="disabled")
         self.stop_button.grid(row=2, column=1, sticky="ew", padx=(4, 0))
 
-        self.sweep_button = ttk.Button(btn_frame, text="RUN HYPER-SWEEP OPTIMIZER", command=self.start_sweep, style="Action.TButton")
-        self.sweep_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.sweep_button = ttk.Button(btn_frame, text="RUN HYPER-SWEEP", command=self.start_sweep, style="Action.TButton")
+        self.sweep_button.grid(row=3, column=0, sticky="ew", padx=(0, 4), pady=(8, 0))
+
+        self.view_sweep_btn = ttk.Button(btn_frame, text="VIEW SAVED SWEEPS", command=self.view_saved_sweeps, style="Action.TButton")
+        self.view_sweep_btn.grid(row=3, column=1, sticky="ew", padx=(4, 0), pady=(8, 0))
 
     def create_placeholder_chart(self):
         # Create gorgeous matching dark themed canvas
@@ -648,10 +651,13 @@ class TradingBotGUI(tk.Tk):
             # Calculate Ask and Bid price dynamically based on spread and precision
             trig_row = df.iloc[trig_loc]
             spread_val = float(trig_row.get("spread", 0))
-            
-            sample_price = df["Close"].iloc[0]
-            decimals = len(str(sample_price).split(".")[1]) if "." in str(sample_price) else 5
-            point_size = 10 ** (-decimals)
+            import MetaTrader5 as mt5
+            if not mt5.initialize():
+                raise RuntimeError("[ERROR] MetaTrader 5 initialization failed. The bot must be fully online.")
+            info = mt5.symbol_info(symbol)
+            if info is None:
+                raise RuntimeError(f"[ERROR] Symbol info for {symbol} could not be retrieved from MetaTrader 5. The bot must be fully online.")
+            point_size = info.point
             
             trig_bid = float(trig_row["Close"])
             trig_ask = trig_bid + (spread_val * point_size)
@@ -676,6 +682,24 @@ class TradingBotGUI(tk.Tk):
                 }
             )
 
+            # Build vlines dynamically
+            vlines_dates = [trig_time]
+            vlines_colors = ["#FFD600"]
+            vlines_widths = [0.8]
+            
+            if entry_idx != -1:
+                entry_time = df.index[entry_idx]
+                vlines_dates.append(entry_time)
+                vlines_colors.append("#00B0FF")
+                vlines_widths.append(0.6)
+
+            vlines_dict = dict(
+                vlines=vlines_dates,
+                colors=vlines_colors,
+                linewidths=vlines_widths,
+                linestyle="dotted",
+            )
+
             # Build figure using returnfig so mplfinance owns the datetime x-axis
             fig, axes = mpf.plot(
                 dfpl,
@@ -683,12 +707,7 @@ class TradingBotGUI(tk.Tk):
                 style=style,
                 title=f"\nPATTERN INSPECTOR \u00b7 {symbol}  ({trade['Result']})",
                 warn_too_much_data=999999,
-                vlines=dict(
-                    vlines=[trig_time],
-                    colors=["#FFD600"],
-                    linewidths=[0.8],
-                    linestyle="dotted",
-                ),
+                vlines=vlines_dict,
                 hlines=dict(
                     hlines=[sl, entry, tp],
                     colors=["#FF1744", "#00B0FF", "#00E676"],
@@ -705,6 +724,18 @@ class TradingBotGUI(tk.Tk):
             ax0.annotate(f"SL  {sl:.5f}",   xy=(1, sl),    xycoords=("axes fraction", "data"), color="#FF1744", fontsize=7, ha="right", va="bottom")
             ax0.annotate(f"Entry  {entry:.5f}", xy=(1, entry), xycoords=("axes fraction", "data"), color="#00B0FF", fontsize=7, ha="right", va="bottom")
             ax0.annotate(f"TP  {tp:.5f}",    xy=(1, tp),    xycoords=("axes fraction", "data"), color="#00E676", fontsize=7, ha="right", va="bottom")
+
+            # Add premium visual legend
+            import matplotlib.lines as mlines
+            legend_handles = [
+                mlines.Line2D([], [], color="#00B0FF", linestyle="--", label="Entry Price"),
+                mlines.Line2D([], [], color="#FF1744", linestyle="--", label="Stop Loss (SL)"),
+                mlines.Line2D([], [], color="#00E676", linestyle="--", label="Take Profit (TP)"),
+                mlines.Line2D([], [], color="#FFD600", linestyle=":", label="Pattern Trigger"),
+            ]
+            if entry_idx != -1:
+                legend_handles.append(mlines.Line2D([], [], color="#00B0FF", linestyle=":", label="Trade Entry Time"))
+            ax0.legend(handles=legend_handles, loc="upper left", facecolor="#1A1A1A", edgecolor="#2C2C2C", labelcolor="#EEEEEE", fontsize=8)
 
             # Label the TP/SL hit on the chart
             if exit_idx != -1:
@@ -784,6 +815,10 @@ class TradingBotGUI(tk.Tk):
             sys.stdout = sys.__stdout__
             sys.stderr = sys.__stderr__
 
+    def view_saved_sweeps(self):
+        symbol = self.var_symbols.get().split(",")[0].strip()
+        self.show_sweep_selection(symbol)
+
     def start_sweep(self):
         symbol = self.var_symbols.get().split(",")[0].strip()
         self.sweep_symbol = symbol
@@ -842,6 +877,9 @@ class TradingBotGUI(tk.Tk):
             self.sweep_button.config(state="normal")
             self.stop_button.config(state="disabled")
             self.log_message("\n[INFO] Engine process terminated.\n", "INFO")
+            
+            # Auto-refresh saved models in case a new model was trained or updated
+            self.refresh_saved_models()
 
             if self.sweep_symbol:
                 sym = self.sweep_symbol
@@ -938,8 +976,26 @@ class TradingBotGUI(tk.Tk):
         lb.pack(side="left", fill="both", expand=True)
         scrollbar.config(command=lb.yview)
 
+        # Get currently applied configuration for comparison
+        from currency.settings import load_settings
+        try:
+            all_settings = load_settings()
+            sym_settings = all_settings.get(symbol, {})
+            current_rr = sym_settings.get("best_rr")
+            current_thr = sym_settings.get("best_threshold")
+        except Exception:
+            current_rr, current_thr = None, None
+
         for i, r in enumerate(top10):
             profit_sign = "+" if r["NetProfit"] >= 0 else ""
+            
+            # Check if this row is the currently applied configuration
+            is_applied = False
+            if current_rr is not None and current_thr is not None:
+                is_applied = (abs(r["RR"] - current_rr) < 1e-4 and abs(r["Threshold"] - current_thr) < 1e-4)
+
+            applied_tag = "  [CURRENTLY APPLIED]" if is_applied else ""
+
             row_text = (
                 f"  #{i+1:<4}  "
                 f"RR {r['RR']:.1f}:1{'':<6}"
@@ -948,10 +1004,13 @@ class TradingBotGUI(tk.Tk):
                 f"W {int(r['Wins']):<5}"
                 f"L {int(r['Losses']):<5}"
                 f"WR {r['WinRate']:.1f}%{'':<5}"
-                f"Profit {profit_sign}${r['NetProfit']:,.2f}"
+                f"Profit {profit_sign}${r['NetProfit']:,.2f}{applied_tag}"
             )
             lb.insert(tk.END, row_text)
-            if i == 0:
+            if is_applied:
+                # Highlight in accent/cyan color
+                lb.itemconfig(i, fg=self.colors["accent"])
+            elif i == 0:
                 lb.itemconfig(i, fg=self.colors["success"])
 
         lb.select_set(0)
@@ -985,6 +1044,7 @@ class TradingBotGUI(tk.Tk):
                 self.log_message(
                     f"[INFO] Sweep config saved for {symbol}: {msg}\n", "INFO"
                 )
+                self.refresh_saved_models()
             else:
                 status_lbl.config(text=f"✗ Save failed: {msg}", fg=self.colors["danger"])
 
@@ -1137,10 +1197,13 @@ class TradingBotGUI(tk.Tk):
                   "close": "Close", "tick_volume": "Volume"}
         price_df.rename(columns=rename, inplace=True)
 
-        # Determine decimals dynamically to avoid hardcoding symbol points
-        sample_price = price_df["Close"].iloc[0]
-        decimals = len(str(sample_price).split(".")[1]) if "." in str(sample_price) else 5
-        point_size = 10 ** (-decimals)
+        import MetaTrader5 as mt5
+        if not mt5.initialize():
+            raise RuntimeError("[ERROR] MetaTrader 5 initialization failed. The bot must be fully online.")
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            raise RuntimeError(f"[ERROR] Symbol info for {symbol} could not be retrieved from MetaTrader 5. The bot must be fully online.")
+        point_size = info.point
 
         candles = []
         for _, row in price_df.iterrows():
@@ -1851,9 +1914,13 @@ updMetrics();
                       "close": "Close", "tick_volume": "Volume"}
             price_df.rename(columns=rename, inplace=True)
 
-            sample_price = price_df["Close"].iloc[0]
-            decimals = len(str(sample_price).split(".")[1]) if "." in str(sample_price) else 5
-            point_size = 10 ** (-decimals)
+            import MetaTrader5 as mt5
+            if not mt5.initialize():
+                raise RuntimeError("[ERROR] MetaTrader 5 initialization failed. The bot must be fully online.")
+            info = mt5.symbol_info(symbol)
+            if info is None:
+                raise RuntimeError(f"[ERROR] Symbol info for {symbol} could not be retrieved from MetaTrader 5. The bot must be fully online.")
+            point_size = info.point
 
             candles = []
             for _, row in price_df.iterrows():
@@ -2073,9 +2140,12 @@ updMetrics();
         scroll_m.grid(row=0, column=1, sticky="ns")
         self.ml_models_listbox.config(yscrollcommand=scroll_m.set)
 
+        scroll_mx = tk.Scrollbar(list_frame, orient="horizontal", command=self.ml_models_listbox.xview)
+        scroll_mx.grid(row=1, column=0, sticky="ew")
+        self.ml_models_listbox.config(xscrollcommand=scroll_mx.set)
+
         apply_frame = tk.Frame(models_card, bg=self.colors["card_bg"])
         apply_frame.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 10))
-        apply_frame.columnconfigure(1, weight=1)
 
         tk.Label(apply_frame, text="Threshold:", bg=self.colors["card_bg"],
                  fg=self.colors["text"], font=("Segoe UI", 9))\
@@ -2087,13 +2157,33 @@ updMetrics();
         self.ml_threshold.insert(0, "0.58")
         self.ml_threshold.grid(row=0, column=1, sticky="w", padx=(0, 12))
 
+        tk.Label(apply_frame, text="RR:", bg=self.colors["card_bg"],
+                 fg=self.colors["text"], font=("Segoe UI", 9))\
+            .grid(row=0, column=2, sticky="w", padx=(0, 6))
+        self.ml_apply_rr = tk.Entry(apply_frame, bg="#2A2A2A", fg=self.colors["text"],
+                                   insertbackground=self.colors["text"], bd=0, relief="flat",
+                                   highlightthickness=1, highlightbackground="#3A3A3A",
+                                   highlightcolor=self.colors["accent"], font=("Segoe UI", 9), width=8)
+        self.ml_apply_rr.insert(0, "5.0")
+        self.ml_apply_rr.grid(row=0, column=3, sticky="w", padx=(0, 12))
+
+        # Column 4 takes empty space so buttons stay on the right
+        apply_frame.columnconfigure(4, weight=1)
+
+        self.ml_delete_btn = ttk.Button(apply_frame, text="DELETE MODEL",
+                                        command=self.delete_selected_model, style="Stop.TButton")
+        self.ml_delete_btn.grid(row=0, column=5, sticky="e", padx=(0, 6))
+
         self.ml_apply_btn = ttk.Button(apply_frame, text="APPLY CONFIG TO SYMBOL",
                                        command=self.apply_model_config, style="Action.TButton")
-        self.ml_apply_btn.grid(row=0, column=2, sticky="e")
+        self.ml_apply_btn.grid(row=0, column=6, sticky="e")
 
         self.ml_status_lbl = tk.Label(apply_frame, text="", bg=self.colors["card_bg"],
                                       fg=self.colors["success"], font=("Segoe UI", 9))
-        self.ml_status_lbl.grid(row=0, column=3, sticky="w", padx=(10, 0))
+        self.ml_status_lbl.grid(row=0, column=7, sticky="w", padx=(10, 0))
+
+        # Bind model list selection event to auto-populate fields
+        self.ml_models_listbox.bind("<<ListboxSelect>>", self.on_ml_model_selected)
 
         # Populate saved models on init
         self.after(500, self.refresh_saved_models)
@@ -2165,13 +2255,13 @@ updMetrics();
 
             df = prep_data(symbol, tf_name)
             print(f"[INFO] Loaded {len(df)} candles.")
-            clean_data(df, symbol)
-            detect_pivot_points(df, symbol)
+            clean_data(df, symbol, timeframe=tf_name)
+            detect_pivot_points(df, symbol, timeframe=tf_name)
 
             pivot_count = df["Is_High"].notna().sum() + df["Is_Low"].notna().sum()
             print(f"[INFO] Detected {pivot_count} pivot points.")
 
-            result = build_and_train_model(df, symbol, RR=rr, test_size=test_size)
+            result = build_and_train_model(df, symbol, RR=rr, test_size=test_size, timeframe=tf_name)
             if result.get("success"):
                 print(f"\n[DONE] Model trained and saved for {symbol}.")
                 print(f"       Test accuracy: {result['test_metrics']['accuracy']:.4f}")
@@ -2207,6 +2297,13 @@ updMetrics();
 
     def refresh_saved_models(self):
         from currency.modules.ml_pattern import list_saved_models
+        from currency.settings import load_settings
+        
+        try:
+            all_settings = load_settings()
+        except Exception:
+            all_settings = {}
+
         self.ml_models_listbox.delete(0, tk.END)
         self._ml_models_data = []  # map listbox index → symbol name
         models = list_saved_models()
@@ -2217,14 +2314,100 @@ updMetrics();
         for m in sorted(models, key=lambda x: x["symbol"]):
             self._ml_models_data.append(m["symbol"])
             meta = m["meta"]
+            
+            # Load active/applied settings from settings.json
+            sym_settings = all_settings.get(m["symbol"], {})
+            applied_rr = sym_settings.get("best_rr")
+            applied_thr = sym_settings.get("best_threshold")
+
+            app_str = ""
+            if applied_rr is not None or applied_thr is not None:
+                app_parts = []
+                if applied_rr is not None:
+                    app_parts.append(f"applied_rr={applied_rr:.1f}")
+                if applied_thr is not None:
+                    app_parts.append(f"applied_thr={applied_thr*100:.0f}%")
+                app_str = " | APPLIED: " + " ".join(app_parts)
+
             if meta:
                 cutoff = meta.get("train_cutoff", "?")
                 n_train = meta.get("n_train", "?")
                 n_test = meta.get("n_test", "?")
-                line = f"  {m['symbol']:<28} cutoff={cutoff}  train={n_train}  test={n_test}"
+                
+                start = meta.get("train_start")
+                if start and len(start) >= 10:
+                    start_str = start[:10]
+                else:
+                    start_str = start if start else "?"
+                
+                if cutoff and len(cutoff) >= 10:
+                    cutoff_str = cutoff[:10]
+                else:
+                    cutoff_str = cutoff if cutoff else "?"
+
+                # Retrieve new fields gracefully
+                test_size = meta.get("test_size")
+                rr = meta.get("rr")
+                accuracy = meta.get("accuracy")
+                precision = meta.get("precision")
+                
+                # Format them nicely
+                ts_str = f"test_size={test_size:.2f}" if isinstance(test_size, (int, float)) else f"test_size={test_size}"
+                rr_str = f"rr={rr:.1f}" if isinstance(rr, (int, float)) else f"rr={rr}"
+                acc_str = f"acc={accuracy*100:.1f}%" if isinstance(accuracy, (int, float)) else ""
+                prec_str = f"prec={precision*100:.1f}%" if isinstance(precision, (int, float)) else ""
+                
+                extra_str = f"  {ts_str}  {rr_str}"
+                if acc_str:
+                    extra_str += f"  {acc_str}"
+                if prec_str:
+                    extra_str += f"  {prec_str}"
+                    
+                line = f"  {m['symbol']:<24} start={start_str}  cutoff={cutoff_str}  train={n_train:<5} test={n_test:<5}{extra_str}{app_str}"
             else:
-                line = f"  {m['symbol']:<28}  (no metadata)"
+                line = f"  {m['symbol']:<24}  (no metadata){app_str}"
             self.ml_models_listbox.insert(tk.END, line)
+
+    def on_ml_model_selected(self, event):
+        sel = self.ml_models_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        if not hasattr(self, '_ml_models_data') or idx >= len(self._ml_models_data):
+            return
+        symbol = self._ml_models_data[idx]
+        
+        # Load from settings.json first
+        from currency.settings import load_settings
+        try:
+            settings = load_settings()
+            sym_settings = settings.get(symbol, {})
+            best_rr = sym_settings.get("best_rr")
+            best_threshold = sym_settings.get("best_threshold")
+        except Exception:
+            best_rr, best_threshold = None, None
+
+        # Fallback to model metadata if not set in settings.json
+        if best_rr is None or best_threshold is None:
+            from currency.modules.ml_pattern import _load_training_metadata
+            try:
+                meta = _load_training_metadata(symbol)
+                if meta:
+                    if best_rr is None:
+                        best_rr = meta.get("rr")
+            except Exception:
+                pass
+
+        if best_rr is None:
+            best_rr = 5.0
+        if best_threshold is None:
+            best_threshold = 0.58
+
+        self.ml_threshold.delete(0, tk.END)
+        self.ml_threshold.insert(0, f"{best_threshold:.2f}")
+
+        self.ml_apply_rr.delete(0, tk.END)
+        self.ml_apply_rr.insert(0, f"{best_rr:.1f}")
 
     def apply_model_config(self):
         sel = self.ml_models_listbox.curselection()
@@ -2238,7 +2421,7 @@ updMetrics();
         symbol = self._ml_models_data[idx]
         try:
             threshold = float(self.ml_threshold.get().strip())
-            rr = float(self.ml_rr.get().strip())
+            rr = float(self.ml_apply_rr.get().strip())
         except ValueError:
             self.ml_status_lbl.config(text="Invalid RR or threshold.", fg=self.colors["danger"])
             return
@@ -2251,8 +2434,54 @@ updMetrics();
                 fg=self.colors["success"]
             )
             self.log_message(f"[INFO] ML config applied: {symbol} — RR={rr:.1f} Threshold={threshold:.2f}\n", "INFO")
+            self.refresh_saved_models()
         else:
             self.ml_status_lbl.config(text=f"✗ {msg}", fg=self.colors["danger"])
+
+    def delete_selected_model(self):
+        sel = self.ml_models_listbox.curselection()
+        if not sel:
+            self.ml_status_lbl.config(text="Select a model first.", fg=self.colors["warning"])
+            return
+        idx = sel[0]
+        if not hasattr(self, '_ml_models_data') or idx >= len(self._ml_models_data):
+            self.ml_status_lbl.config(text="Invalid selection.", fg=self.colors["danger"])
+            return
+        symbol = self._ml_models_data[idx]
+        
+        from tkinter import messagebox
+        confirm = messagebox.askyesno(
+            "Confirm Model Deletion",
+            f"Are you sure you want to permanently delete the machine learning model and metadata for {symbol}?\nThis action cannot be undone.",
+            parent=self
+        )
+        if not confirm:
+            return
+
+        from currency.modules.ml_pattern import MODEL_DIR, _loaded_models
+        
+        deleted_count = 0
+        for filename in [f"{symbol}_pattern_model.joblib", f"{symbol}_pattern_meta.json"]:
+            path = os.path.join(MODEL_DIR, filename)
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                    deleted_count += 1
+                except Exception as e:
+                    self.log_message(f"[ERROR] Failed to delete file {filename}: {e}\n", "ERROR")
+
+        # Clear cache in memory
+        model_path = os.path.join(MODEL_DIR, f"{symbol}_pattern_model.joblib")
+        if model_path in _loaded_models:
+            del _loaded_models[model_path]
+
+        self.refresh_saved_models()
+        
+        if deleted_count > 0:
+            self.ml_status_lbl.config(text=f"✓ Deleted model for {symbol}", fg=self.colors["success"])
+            self.log_message(f"[INFO] Deleted ML model files for {symbol}\n", "INFO")
+        else:
+            self.ml_status_lbl.config(text="No files were found to delete.", fg=self.colors["warning"])
 
 
 if __name__ == "__main__":

@@ -73,14 +73,22 @@ def prep_data(symbol, timeframe_name, visualize=False):
     df = pd.read_csv(filename)
     df["time"] = pd.to_datetime(df["time"])
     df.set_index("time", inplace=True)
-    ohlcv_df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
+    
+    cols = ["Open", "High", "Low", "Close", "Volume"]
+    if "spread" in df.columns:
+        cols.append("spread")
+    ohlcv_df = df[cols].copy()
+    if "spread" not in ohlcv_df.columns:
+        ohlcv_df["spread"] = 0.0
+        
     if visualize:
-        mpf.plot(ohlcv_df, type="candle", style="line", title=f"{symbol} {timeframe_name}", volume=True)
+        mpf.plot(ohlcv_df[["Open", "High", "Low", "Close", "Volume"]], type="candle", style="line", title=f"{symbol} {timeframe_name}", volume=True)
     return ohlcv_df
 
 
-def clean_data(df, symbol, visualize=False):
-    sym_cfg = settings.get(symbol, {})
+def clean_data(df, symbol, timeframe=None, visualize=False):
+    model_symbol = f"{symbol}_{timeframe}" if timeframe else symbol
+    sym_cfg = settings.get(model_symbol, settings.get(symbol, {}))
     polyorder     = sym_cfg.get("polyorder",     6)
     window_length = sym_cfg.get("window_length", 7)
     close_prices = df["Close"].to_numpy()
@@ -94,8 +102,9 @@ def clean_data(df, symbol, visualize=False):
         plt.show()
 
 
-def detect_pivot_points(df, symbol, visualize=False):
-    sym_cfg = settings.get(symbol, {})
+def detect_pivot_points(df, symbol, timeframe=None, visualize=False):
+    model_symbol = f"{symbol}_{timeframe}" if timeframe else symbol
+    sym_cfg = settings.get(model_symbol, settings.get(symbol, {}))
     order = sym_cfg.get("order", 5)
     smoothed_close = df["smoothed_close"].to_numpy()
     highs = argrelextrema(smoothed_close, np.greater, mode="wrap", order=order)[0]
@@ -121,26 +130,14 @@ def _get_pending_entry_prices(symbol):
 def get_symbol_min_stop_distance(symbol, sample_price=None):
     """
     Get the minimum stop loss/take profit distance in price for the symbol.
-    Queries MT5 if online, else falls back to dynamic precision decimals calculation.
+    Strictly queries MT5 online. Raises RuntimeError if offline.
     """
-    try:
-        symbol_info = mt5.symbol_info(symbol)
-        if symbol_info is not None:
-            stops_level = symbol_info.trade_stops_level
-            point = symbol_info.point
-            return stops_level * point
-    except Exception:
-        pass
-        
-    if sample_price is not None:
-        try:
-            decimals = len(str(sample_price).split(".")[1]) if "." in str(sample_price) else 5
-            point = 10 ** (-decimals)
-            return 10 * point  # safe conservative default of 10 points
-        except Exception:
-            pass
-            
-    return 0.0
+    symbol_info = mt5.symbol_info(symbol)
+    if symbol_info is None:
+        raise RuntimeError(f"[ERROR] Symbol info for {symbol} could not be retrieved from MetaTrader 5. The bot must be fully online.")
+    stops_level = symbol_info.trade_stops_level
+    point = symbol_info.point
+    return stops_level * point
 
 
 def run_strategy(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbol, live_trading=False):
@@ -156,19 +153,21 @@ def run_strategy(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbo
     results = []
     balance_history = []
 
-    pending_prices = set()
-    if live_trading:
-        try:
-            pending_prices = _get_pending_entry_prices(symbol)
-        except Exception:
-            pass
+    desired_pending_patterns = []
 
     high_arr = df["High"].to_numpy()
     low_arr = df["Low"].to_numpy()
+    
+    symbol_info = mt5.symbol_info(symbol)
+    if symbol_info is None:
+        raise RuntimeError(f"[ERROR] Symbol info for {symbol} could not be retrieved from MetaTrader 5. The bot must be fully online.")
+    point_size = symbol_info.point
+        
+    raw_spreads = df["spread"].to_numpy() if "spread" in df.columns else np.zeros_like(low_arr)
+    spread_arr = raw_spreads * point_size
     index_arr = df.index
-
-    sample_price = df["Close"].iloc[0] if not df.empty else 1.0
-    min_stop_dist = get_symbol_min_stop_distance(symbol, sample_price=sample_price)
+ 
+    min_stop_dist = get_symbol_min_stop_distance(symbol)
 
     for trade in plot_df.itertuples():
         entry_price = float(trade.Entry)
@@ -182,9 +181,6 @@ def run_strategy(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbo
             print(f"[INFO] Skipping trade for {symbol} at {occurrence_time}: stop loss too close to entry ({sl_dist:.5f} < min {min_stop_dist:.5f})")
             continue
 
-        if live_trading and entry_price in pending_prices:
-            continue
-
         try:
             occ_loc = index_arr.get_loc(occurrence_time)
         except KeyError:
@@ -194,21 +190,25 @@ def run_strategy(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbo
         # Vectorized: search for entry, SL, TP after occurrence
         future_high = high_arr[occ_loc + 1:]
         future_low = low_arr[occ_loc + 1:]
+        future_spread = spread_arr[occ_loc + 1:]
         future_index = index_arr[occ_loc + 1:]
 
         is_buy = stop_loss < entry_price
 
         if is_buy:
-            entry_mask = future_low <= entry_price
+            entry_mask = (future_low + future_spread) <= entry_price
         else:
             entry_mask = future_high >= entry_price
 
         if not entry_mask.any():
             neither += 1
             if live_trading:
-                _place_pending_order(symbol, entry_price, stop_loss, take_profit,
-                                     risk_amount, risk_type, balance)
-                pending_prices.add(entry_price)
+                desired_pending_patterns.append({
+                    "Occurrence": occurrence_time,
+                    "Entry": entry_price,
+                    "Stop_Loss": stop_loss,
+                    "Take_Profit": take_profit,
+                })
             results.append({
                 "Occurrence": occurrence_time, "Entry": entry_price,
                 "Stop_Loss": stop_loss, "Take_Profit": take_profit,
@@ -220,13 +220,14 @@ def run_strategy(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbo
         entry_pos = entry_mask.argmax()
         post_high = future_high[entry_pos:]
         post_low = future_low[entry_pos:]
+        post_spread = future_spread[entry_pos:]
 
         if is_buy:
             sl_mask = post_low <= stop_loss
             tp_mask = post_high >= take_profit
         else:
-            sl_mask = post_high >= stop_loss
-            tp_mask = post_low <= take_profit
+            sl_mask = (post_high + post_spread) >= stop_loss
+            tp_mask = (post_low + post_spread) <= take_profit
 
         sl_pos = sl_mask.argmax() if sl_mask.any() else len(post_high)
         tp_pos = tp_mask.argmax() if tp_mask.any() else len(post_low)
@@ -249,6 +250,9 @@ def run_strategy(df, plot_df, RR, initial_balance, risk_amount, risk_type, symbo
             "Result": result, "Balance": balance,
         })
         balance_history.append({"Occurrence": occurrence_time, "Balance": balance})
+
+    if live_trading:
+        _reconcile_pending_orders(symbol, desired_pending_patterns, risk_amount, risk_type, balance)
 
     return pd.DataFrame(results), wins, losses, neither
 
@@ -292,7 +296,209 @@ def _place_pending_order(symbol, entry_price, stop_loss, take_profit, risk_amoun
         print(f"[ERROR] Exception during order placement for {symbol} @ {entry_price}: {e}")
 
 
+def _reconcile_pending_orders(symbol, desired_pending_patterns, risk_amount, risk_type, balance):
+    """
+    Reconciles pending limit orders on MetaTrader 5 with the desired recent patterns.
+    Implements a FIFO queue logic where new patterns displace oldest active ones,
+    while empty slots are filled from the oldest inactive stored pending patterns.
+    Everything is adjustable live, and TP/SL are checked to ensure active orders stay up to date.
+    """
+    # 1. Reload global settings dynamically to pick up live adjustments
+    live_settings = load_settings()
+    
+    # 2. Get live customizable limits from settings
+    # Default: max 5 active pending orders per symbol
+    max_pending = live_settings.get("max_pending_orders", 5)
+    # Default: max age of 48 hours for a pending pattern
+    max_age_hours = live_settings.get("max_pending_order_age_hours", 48)
+
+    # Check per-symbol overrides if present
+    sym_cfg = live_settings.get(symbol, {})
+    if isinstance(sym_cfg, dict):
+        max_pending = sym_cfg.get("max_pending_orders", max_pending)
+        max_age_hours = sym_cfg.get("max_pending_order_age_hours", max_age_hours)
+
+    print(f"[RECONCILE] Running pending order reconciliation for {symbol} (Limit: {max_pending} slots, Max Age: {max_age_hours}h)...")
+
+    # 3. Filter desired patterns to keep only those within the allowed max age
+    now = datetime.now()
+    recent_patterns = []
+    for p in desired_pending_patterns:
+        occ = p.get("Occurrence")
+        # Ensure occurrence time is a naive datetime object for timezone comparison
+        if isinstance(occ, str):
+            try:
+                occ_dt = pd.to_datetime(occ)
+            except Exception:
+                occ_dt = now
+        else:
+            occ_dt = occ
+        
+        if hasattr(occ_dt, "tzinfo") and occ_dt.tzinfo is not None:
+            occ_dt = occ_dt.replace(tzinfo=None)
+            
+        age = now - occ_dt
+        if age <= timedelta(hours=max_age_hours):
+            recent_patterns.append(p)
+
+    # Ensure chronological order (oldest to newest)
+    recent_patterns.sort(key=lambda x: x.get("Occurrence"))
+
+    # 4. Fetch current pending orders on MetaTrader 5 for this symbol
+    active_orders = mt5.orders_get(symbol=symbol)
+    if active_orders is None:
+        active_orders = []
+        
+    # Only manage active pending orders placed by this bot
+    bot_active_orders = [o for o in active_orders if o.comment == "Echelnet Bot"]
+
+    # 5. Cancel any active order on MT5 that is NO LONGER in our recent_patterns at all
+    # (e.g. because it was filled, hit SL/TP, or is older than max_age_hours)
+    valid_active_orders = []
+    for order in bot_active_orders:
+        matched = False
+        for p in recent_patterns:
+            if abs(order.price_open - float(p["Entry"])) < 1e-5:
+                matched = True
+                break
+        if not matched:
+            print(f"[RECONCILE] Cancelling invalidated pending order for {symbol} @ price {order.price_open} (Ticket: {order.ticket})")
+            cancel_request = {
+                "action": mt5.TRADE_ACTION_REMOVE,
+                "order": order.ticket
+            }
+            res = mt5.order_send(cancel_request)
+            if res is None or res.retcode != mt5.TRADE_RETCODE_DONE:
+                err_code = mt5.last_error() if hasattr(mt5, 'last_error') else 'N/A'
+                print(f"[RECONCILE] Failed to cancel order {order.ticket}: {err_code}")
+        else:
+            valid_active_orders.append(order)
+
+    # 6. Check if TP and SL are up-to-date for the remaining active orders
+    # If not, cancel the outdated active order so it will be replaced with updated TP/SL!
+    up_to_date_active_orders = []
+    for order in valid_active_orders:
+        tp_sl_correct = False
+        for p in recent_patterns:
+            if abs(order.price_open - float(p["Entry"])) < 1e-5:
+                # Check stop loss and take profit (floating point check within a small epsilon)
+                sl_match = abs(order.sl - float(p["Stop_Loss"])) < 1e-5
+                tp_match = abs(order.tp - float(p["Take_Profit"])) < 1e-5
+                if sl_match and tp_match:
+                    tp_sl_correct = True
+                break
+        
+        if not tp_sl_correct:
+            print(f"[RECONCILE] Cancelling pending order with outdated TP/SL for {symbol} @ price {order.price_open} (Ticket: {order.ticket})")
+            cancel_request = {
+                "action": mt5.TRADE_ACTION_REMOVE,
+                "order": order.ticket
+            }
+            res = mt5.order_send(cancel_request)
+            if res is None or res.retcode != mt5.TRADE_RETCODE_DONE:
+                err_code = mt5.last_error() if hasattr(mt5, 'last_error') else 'N/A'
+                print(f"[RECONCILE] Failed to cancel outdated order {order.ticket}: {err_code}")
+        else:
+            up_to_date_active_orders.append(order)
+
+    # Update active count (K) based on the remaining up-to-date active orders
+    K = len(up_to_date_active_orders)
+
+    # 7. Check if there is a brand-new pattern in our recent list
+    # A pattern is "brand-new" if it occurred within the last 15 minutes and is not currently active on MT5
+    new_pattern_to_place = None
+    if recent_patterns:
+        newest_p = recent_patterns[-1]
+        occ_dt = newest_p.get("Occurrence")
+        if hasattr(occ_dt, "tzinfo") and occ_dt.tzinfo is not None:
+            occ_dt = occ_dt.replace(tzinfo=None)
+        
+        # Check if the newest pattern occurred within the last 15 minutes
+        if now - occ_dt <= timedelta(minutes=15):
+            # Check if it is not already active
+            is_active = False
+            for order in up_to_date_active_orders:
+                if abs(order.price_open - float(newest_p["Entry"])) < 1e-5:
+                    is_active = True
+                    break
+            if not is_active:
+                new_pattern_to_place = newest_p
+
+    # 8. Place the brand-new pattern (if any) with displacement if slots are exceeded
+    if new_pattern_to_place:
+        entry_price = float(new_pattern_to_place["Entry"])
+        stop_loss = float(new_pattern_to_place["Stop_Loss"])
+        take_profit = float(new_pattern_to_place["Take_Profit"])
+        
+        if K >= max_pending:
+            # Slots exceeded: find the oldest active order on MT5 that is in recent_patterns
+            # We want to cancel/displace it to make room!
+            oldest_active_order = None
+            for p in recent_patterns:
+                # Iterate chronologically (oldest pattern first)
+                for order in up_to_date_active_orders:
+                    if abs(order.price_open - float(p["Entry"])) < 1e-5:
+                        oldest_active_order = order
+                        break
+                if oldest_active_order:
+                    break
+            
+            if oldest_active_order:
+                print(f"[RECONCILE] Active slot limit {max_pending} exceeded. "
+                      f"Displacing oldest active order for {symbol} @ price {oldest_active_order.price_open} (Ticket: {oldest_active_order.ticket})")
+                cancel_request = {
+                    "action": mt5.TRADE_ACTION_REMOVE,
+                    "order": oldest_active_order.ticket
+                }
+                res = mt5.order_send(cancel_request)
+                if res is not None and res.retcode == mt5.TRADE_RETCODE_DONE:
+                    # Update active orders list and count
+                    up_to_date_active_orders = [o for o in up_to_date_active_orders if o.ticket != oldest_active_order.ticket]
+                    K = len(up_to_date_active_orders)
+                else:
+                    err_code = mt5.last_error() if hasattr(mt5, 'last_error') else 'N/A'
+                    print(f"[RECONCILE] Failed to displace oldest active order: {err_code}")
+        
+        # Place the new pattern!
+        if K < max_pending:
+            print(f"[RECONCILE] Placing brand-new pending order for {symbol} @ price {entry_price}")
+            _place_pending_order(symbol, entry_price, stop_loss, take_profit, risk_amount, risk_type, balance)
+            
+            # Re-fetch active orders to ensure up_to_date_active_orders list is fresh
+            active_orders = mt5.orders_get(symbol=symbol)
+            if active_orders is None:
+                active_orders = []
+            up_to_date_active_orders = [o for o in active_orders if o.comment == "Echelnet Bot"]
+            K = len(up_to_date_active_orders)
+
+    # 9. Fill any remaining empty slots starting from the oldest inactive recent patterns
+    if K < max_pending:
+        for p in recent_patterns:
+            entry_price = float(p["Entry"])
+            stop_loss = float(p["Stop_Loss"])
+            take_profit = float(p["Take_Profit"])
+            
+            # Check if this pattern is already active on MT5
+            already_active = False
+            for order in up_to_date_active_orders:
+                if abs(order.price_open - entry_price) < 1e-5:
+                    already_active = True
+                    break
+                    
+            if not already_active:
+                print(f"[RECONCILE] Filling empty slot. Placing stored pending order for {symbol} @ price {entry_price}")
+                _place_pending_order(symbol, entry_price, stop_loss, take_profit, risk_amount, risk_type, balance)
+                K += 1
+                if K >= max_pending:
+                    break
+
+    print(f"[RECONCILE] Reconciliation complete. Active pending orders on MT5 for {symbol}: {K}/{max_pending}")
+
+
 def analyze_symbol(symbol, live_trading=False, config=None):
+    global settings
+    settings = load_settings()
+
     if config is None:
         config = {}
 
@@ -320,18 +526,19 @@ def analyze_symbol(symbol, live_trading=False, config=None):
         return
 
     df = prep_data(symbol, timeframe_name)
-    clean_data(df, symbol)
-    detect_pivot_points(df, symbol)
+    clean_data(df, symbol, timeframe=timeframe_name)
+    detect_pivot_points(df, symbol, timeframe=timeframe_name)
 
     for strategy_name in strategies:
         if strategy_name == "MLPattern":
             from .modules.ml_pattern import build_and_train_model, MODEL_DIR
-            model_path = os.path.join(MODEL_DIR, f"{symbol}_pattern_model.joblib")
+            model_filename = f"{symbol}_{timeframe_name}_pattern_model.joblib" if timeframe_name else f"{symbol}_pattern_model.joblib"
+            model_path = os.path.join(MODEL_DIR, model_filename)
             if not os.path.exists(model_path):
-                print(f"[INFO] Saved model for {symbol} not found. Building and training ML model first...")
-                build_and_train_model(df, symbol, RR=config.get("rr", 5.0))
+                print(f"[INFO] Saved model for {symbol}_{timeframe_name} not found. Building and training ML model first...")
+                build_and_train_model(df, symbol, RR=config.get("rr", 5.0), timeframe=timeframe_name)
         
-        strategy = Strategy(df, symbol=symbol)
+        strategy = Strategy(df, symbol=symbol, timeframe=timeframe_name)
         rr = config.get("rr", 5.0)
         plot_df = getattr(strategy, strategy_name)(RR=rr)
 

@@ -35,23 +35,45 @@ def extract_features_from_pivots(pivots_seq):
     return features
 
 
-def label_pivot_trade(df, occ_idx, entry_price, stop_loss, take_profit, is_buy):
+def label_pivot_trade(df, occ_idx, entry_price, stop_loss, take_profit, is_buy, symbol="GBPUSD"):
     future_data = df.iloc[occ_idx + 1 :]
     if future_data.empty:
         return 0
 
+    import MetaTrader5 as mt5
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        raise RuntimeError(f"[ERROR] Symbol info for {symbol} could not be retrieved from MetaTrader 5. The bot must be fully online.")
+    point_size = info.point
+
     highs = future_data["High"].to_numpy()
     lows = future_data["Low"].to_numpy()
+    raw_spreads = future_data["spread"].to_numpy() if "spread" in future_data.columns else np.zeros_like(lows)
+    spreads = raw_spreads * point_size
 
     if is_buy:
-        sl_hits = lows <= stop_loss
-        tp_hits = highs >= take_profit
+        entry_mask = (lows + spreads) <= entry_price
     else:
-        sl_hits = highs >= stop_loss
-        tp_hits = lows <= take_profit
+        entry_mask = highs >= entry_price
 
-    first_sl = sl_hits.argmax() if sl_hits.any() else len(future_data)
-    first_tp = tp_hits.argmax() if tp_hits.any() else len(future_data)
+    if not entry_mask.any():
+        return 0
+
+    first_entry_index = entry_mask.argmax()
+
+    post_highs = highs[first_entry_index:]
+    post_lows = lows[first_entry_index:]
+    post_spreads = spreads[first_entry_index:]
+
+    if is_buy:
+        sl_hits = post_lows <= stop_loss
+        tp_hits = post_highs >= take_profit
+    else:
+        sl_hits = (post_highs + post_spreads) >= stop_loss
+        tp_hits = (post_lows + post_spreads) <= take_profit
+
+    first_sl = sl_hits.argmax() if sl_hits.any() else len(post_highs)
+    first_tp = tp_hits.argmax() if tp_hits.any() else len(post_lows)
 
     if not sl_hits.any() and not tp_hits.any():
         return 0
@@ -94,7 +116,7 @@ def get_all_pivot_sequences(df):
     return sequences, trigger_indices, is_buy_list
 
 
-def _build_xy(df, sequences, trigger_indices, is_buy_list, RR):
+def _build_xy(df, sequences, trigger_indices, is_buy_list, RR, symbol="GBPUSD"):
     X, y, meta = [], [], []
     for seq, trig_time, is_buy in zip(sequences, trigger_indices, is_buy_list):
         features = extract_features_from_pivots(seq)
@@ -111,7 +133,7 @@ def _build_xy(df, sequences, trigger_indices, is_buy_list, RR):
             take_profit = entry_price - (stop_loss - entry_price) * RR
 
         occ_idx = seq[0]["idx"]
-        label = label_pivot_trade(df, occ_idx, entry_price, stop_loss, take_profit, is_buy)
+        label = label_pivot_trade(df, occ_idx, entry_price, stop_loss, take_profit, is_buy, symbol=symbol)
 
         X.append(features)
         y.append(label)
@@ -164,11 +186,17 @@ def _metadata_path(symbol):
     return os.path.join(MODEL_DIR, f"{symbol}_pattern_meta.json")
 
 
-def _save_training_metadata(symbol, cutoff_date, n_train, n_test):
+def _save_training_metadata(symbol, cutoff_date, n_train, n_test, rr=5.0, test_size=0.2, accuracy=None, precision=None, f1=None, train_start=None):
     meta = {
+        "train_start": str(train_start) if train_start else None,
         "train_cutoff": str(cutoff_date),
         "n_train": n_train,
         "n_test": n_test,
+        "rr": rr,
+        "test_size": test_size,
+        "accuracy": accuracy,
+        "precision": precision,
+        "f1": f1,
         "trained_at": str(pd.Timestamp.now()),
     }
     path = _metadata_path(symbol)
@@ -230,7 +258,7 @@ def predict_pattern_probability(symbol, pivots_seq):
 
 
 def build_and_train_model(df, symbol, RR=5.0, test_size=0.2,
-                          cutoff_date=None, retrain_on_all=True):
+                          cutoff_date=None, retrain_on_all=True, timeframe=None):
     """
     Trains a RandomForest with temporal isolation.
 
@@ -251,12 +279,25 @@ def build_and_train_model(df, symbol, RR=5.0, test_size=0.2,
     retrain_on_all : bool
         If True, saves a final model trained on ALL data (for production).
         The validation metrics still come from the temporally-isolated test set.
+    timeframe : str, optional
+        Timeframe of training data to append to model name.
 
     Returns
     -------
     dict with keys: success, train_metrics, test_metrics, n_train, n_test, cutoff
     """
-    print(f"[INFO] Extracting pivot sequences for {symbol}...")
+    if timeframe is None and len(df) >= 2:
+        try:
+            delta = df.index[1] - df.index[0]
+            minutes = int(round(delta.total_seconds() / 60))
+            tf_map = {1: "M1", 5: "M5", 10: "M10", 15: "M15", 30: "M30", 60: "H1", 240: "H4", 1440: "D1"}
+            timeframe = tf_map.get(minutes)
+        except Exception:
+            pass
+
+    model_symbol = f"{symbol}_{timeframe}" if timeframe else symbol
+
+    print(f"[INFO] Extracting pivot sequences for {symbol} (using model ID: {model_symbol})...")
     sequences, trigger_indices, is_buy_list = get_all_pivot_sequences(df)
 
     if len(sequences) < 15:
@@ -264,7 +305,7 @@ def build_and_train_model(df, symbol, RR=5.0, test_size=0.2,
         return {"success": False, "reason": f"Only {len(sequences)} sequences, need 15"}
 
     # Build full X, y
-    X, y, meta = _build_xy(df, sequences, trigger_indices, is_buy_list, RR)
+    X, y, meta = _build_xy(df, sequences, trigger_indices, is_buy_list, RR, symbol=symbol)
 
     # --- Date-based temporal split (no shuffle: first (1-test_size) of time range for training) ---
     if cutoff_date is None:
@@ -308,11 +349,11 @@ def build_and_train_model(df, symbol, RR=5.0, test_size=0.2,
     if retrain_on_all:
         final = _build_model()
         final.fit(X, y)
-        model_path = os.path.join(MODEL_DIR, f"{symbol}_pattern_model.joblib")
+        model_path = os.path.join(MODEL_DIR, f"{model_symbol}_pattern_model.joblib")
         joblib.dump(final, model_path)
         print(f"[INFO] Final model (trained on all {len(X)} sequences) saved to {model_path}")
     else:
-        model_path = os.path.join(MODEL_DIR, f"{symbol}_pattern_model.joblib")
+        model_path = os.path.join(MODEL_DIR, f"{model_symbol}_pattern_model.joblib")
         joblib.dump(model, model_path)
         print(f"[INFO] Model (trained on {len(X_train)} sequences only) saved to {model_path}")
 
@@ -320,7 +361,18 @@ def build_and_train_model(df, symbol, RR=5.0, test_size=0.2,
         del _loaded_models[model_path]
 
     # Save training metadata for the temporal guard in MLPattern()
-    _save_training_metadata(symbol, cutoff_date, int(train_mask.sum()), int(test_mask.sum()))
+    _save_training_metadata(
+        model_symbol, 
+        cutoff_date, 
+        int(train_mask.sum()), 
+        int(test_mask.sum()),
+        rr=RR,
+        test_size=test_size,
+        accuracy=test_metrics.get("accuracy"),
+        precision=test_metrics.get("precision"),
+        f1=test_metrics.get("f1"),
+        train_start=min(trigger_indices) if trigger_indices else None
+    )
 
     result = {
         "success": True,

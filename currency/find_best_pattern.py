@@ -61,21 +61,20 @@ def run_sweep(symbol="EURUSD", timeframe_name="M5"):
         os.makedirs(HISTORY_DATA_DIR, exist_ok=True)
         df.to_csv(filename, index=False)
 
-    mt5.shutdown()
-
     # Load and clean data
     df = prep_data(symbol, timeframe_name)
-    clean_data(df, symbol)
-    detect_pivot_points(df, symbol)
+    clean_data(df, symbol, timeframe=timeframe_name)
+    detect_pivot_points(df, symbol, timeframe=timeframe_name)
 
     # Make sure we have a trained model
-    model_path = os.path.join(MODEL_DIR, f"{symbol}_pattern_model.joblib")
+    model_symbol = f"{symbol}_{timeframe_name}" if timeframe_name else symbol
+    model_path = os.path.join(MODEL_DIR, f"{model_symbol}_pattern_model.joblib")
     if not os.path.exists(model_path):
-        print(f"[INFO] Saved model for {symbol} not found. Auto-training now...")
-        build_and_train_model(df, symbol, RR=5.0)
+        print(f"[INFO] Saved model for {model_symbol} not found. Auto-training now...")
+        build_and_train_model(df, symbol, RR=5.0, timeframe=timeframe_name)
 
     # Instantiate Strategy with symbol
-    strategy = Strategy(df, symbol=symbol)
+    strategy = Strategy(df, symbol=symbol, timeframe=timeframe_name)
 
     # Define sweep grid
     rr_values = [2.0, 3.0, 4.0, 5.0, 6.0]
@@ -95,10 +94,17 @@ def run_sweep(symbol="EURUSD", timeframe_name="M5"):
     t0 = time.time()
 
     # Pre-calculate prediction probabilities for all sequences to speed up calculations
-    probs = [predict_pattern_probability(symbol, seq) for seq in sequences]
+    probs = [predict_pattern_probability(model_symbol, seq) for seq in sequences]
+
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        raise RuntimeError(f"[ERROR] Symbol info for {symbol} could not be retrieved from MetaTrader 5. The bot must be fully online.")
+    point_size = info.point
 
     high_arr = df["High"].to_numpy()
     low_arr = df["Low"].to_numpy()
+    raw_spreads = df["spread"].to_numpy() if "spread" in df.columns else np.zeros_like(low_arr)
+    spread_arr = raw_spreads * point_size
     index_arr = df.index
 
     for rr in rr_values:
@@ -136,8 +142,13 @@ def run_sweep(symbol="EURUSD", timeframe_name="M5"):
                 # Check outcome
                 future_high = high_arr[occ_loc + 1:]
                 future_low = low_arr[occ_loc + 1:]
+                future_spread = spread_arr[occ_loc + 1:]
 
-                entry_mask = future_high >= entry_price
+                if is_buy:
+                    entry_mask = (future_low + future_spread) <= entry_price
+                else:
+                    entry_mask = future_high >= entry_price
+
                 if not entry_mask.any():
                     neither += 1
                     continue
@@ -145,9 +156,14 @@ def run_sweep(symbol="EURUSD", timeframe_name="M5"):
                 entry_pos = entry_mask.argmax()
                 post_high = future_high[entry_pos:]
                 post_low = future_low[entry_pos:]
+                post_spread = future_spread[entry_pos:]
 
-                sl_mask = post_high >= stop_loss if not is_buy else post_low <= stop_loss
-                tp_mask = post_low <= take_profit if not is_buy else post_high >= take_profit
+                if is_buy:
+                    sl_mask = post_low <= stop_loss
+                    tp_mask = post_high >= take_profit
+                else:
+                    sl_mask = (post_high + post_spread) >= stop_loss
+                    tp_mask = (post_low + post_spread) <= take_profit
 
                 sl_pos = sl_mask.argmax() if sl_mask.any() else len(post_high)
                 tp_pos = tp_mask.argmax() if tp_mask.any() else len(post_low)
@@ -228,6 +244,7 @@ def run_sweep(symbol="EURUSD", timeframe_name="M5"):
 
     print(f"\n[INFO] Top-10 results saved — select your preferred setup in the GUI to save it.")
     print("=" * 80 + "\n")
+    mt5.shutdown()
 
 
 def save_sweep_result(symbol, result):
