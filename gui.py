@@ -219,18 +219,21 @@ class TradingBotGUI(tk.Tk):
         self.notebook.add(self.tab_replay, text="   LIVE REPLAY   ")
         self._build_replay_tab()
 
-        # Tab 5: ML Training
-        self.tab_ml_train = ttk.Frame(self.notebook, style="TFrame")
-        self.notebook.add(self.tab_ml_train, text="   ML TRAINING   ")
-        self._build_ml_train_tab()
+        # Tab 5: Parameter Optimizer
+        self.tab_optimizer = ttk.Frame(self.notebook, style="TFrame")
+        self.notebook.add(self.tab_optimizer, text="   PARAM OPTIMIZER   ")
+        self._build_optimizer_tab()
 
         # Core thread states
         self.stop_event = threading.Event()
         self.bot_thread = None
         self.all_backtest_trades = None
         self.backtest_trades = None
-        self.sweep_symbol = None
         self.metrics_filter = "All"
+
+        # Optimizer thread state
+        self.optimizer_thread = None
+        self.optimizer_stream = None
 
         # Replay state — HTML file generated after each backtest
         self.replay_html_path = None
@@ -270,7 +273,7 @@ class TradingBotGUI(tk.Tk):
         self.var_start_date = add_field(2, "Start Date (YYYY-MM-DD):", "entry", two_months_ago)
         self.var_end_date = add_field(3, "End Date (YYYY-MM-DD):", "entry", datetime.now().strftime("%Y-%m-%d"))
         
-        self.var_strategy = add_field(4, "Strategy Model:", "combo", "Noir", ["Noir", "BreakerBlock", "DoubleTop", "TripleTop", "MLPattern"])
+        self.var_strategy = add_field(4, "Strategy Model:", "combo", "Noir", ["Noir", "BreakerBlock", "DoubleTop", "TripleTop"])
         self.var_balance = add_field(5, "Initial Balance ($):", "entry", "1000.0")
         self.var_risk_amount = add_field(6, "Risk Value:", "entry", "25.0")
         self.var_risk_type = add_field(7, "Risk Metric Type:", "combo", "fixed", ["fixed", "percentage"])
@@ -300,11 +303,7 @@ class TradingBotGUI(tk.Tk):
         self.stop_button = ttk.Button(btn_frame, text="FORCE SHUTDOWN", command=self.stop_bot, style="Stop.TButton", state="disabled")
         self.stop_button.grid(row=2, column=1, sticky="ew", padx=(4, 0))
 
-        self.sweep_button = ttk.Button(btn_frame, text="RUN HYPER-SWEEP", command=self.start_sweep, style="Action.TButton")
-        self.sweep_button.grid(row=3, column=0, sticky="ew", padx=(0, 4), pady=(8, 0))
 
-        self.view_sweep_btn = ttk.Button(btn_frame, text="VIEW SAVED SWEEPS", command=self.view_saved_sweeps, style="Action.TButton")
-        self.view_sweep_btn.grid(row=3, column=1, sticky="ew", padx=(4, 0), pady=(8, 0))
 
     def create_placeholder_chart(self):
         # Create gorgeous matching dark themed canvas
@@ -776,7 +775,6 @@ class TradingBotGUI(tk.Tk):
 
         live_trading = self.mode_var.get() == "live"
         self.start_button.config(state="disabled")
-        self.sweep_button.config(state="disabled")
         self.stop_button.config(state="normal")
         
         self.log_area.delete("1.0", tk.END)
@@ -815,40 +813,7 @@ class TradingBotGUI(tk.Tk):
             sys.stdout = sys.__stdout__
             sys.stderr = sys.__stderr__
 
-    def view_saved_sweeps(self):
-        symbol = self.var_symbols.get().split(",")[0].strip()
-        self.show_sweep_selection(symbol)
 
-    def start_sweep(self):
-        symbol = self.var_symbols.get().split(",")[0].strip()
-        self.sweep_symbol = symbol
-        self.start_button.config(state="disabled")
-        self.sweep_button.config(state="disabled")
-        self.stop_button.config(state="normal")
-        
-        self.log_area.delete("1.0", tk.END)
-        self.log_message(f"[INFO] Initializing hyper-sweep parameter optimizer for {symbol}...\n", "INFO")
-        self.log_message("[INFO] Model loading has been fully cached. Scan will be extremely rapid.\n", "INFO")
-        
-        self.stop_event.clear()
-        
-        self.log_stream = StringIO()
-        sys.stdout = self.log_stream
-        sys.stderr = self.log_stream
-
-        self.bot_thread = threading.Thread(target=self.run_sweep_logic, args=(symbol,), daemon=True)
-        self.bot_thread.start()
-        self.after(100, self.update_logs)
-
-    def run_sweep_logic(self, symbol):
-        try:
-            from currency.find_best_pattern import run_sweep
-            run_sweep(symbol=symbol)
-        except Exception as e:
-            self.log_message(f"\n[ERROR] Sweep thread execution failed: {e}\n", "ERROR")
-        finally:
-            sys.stdout = sys.__stdout__
-            sys.stderr = sys.__stderr__
 
     def update_logs(self):
         log_contents = self.log_stream.getvalue()
@@ -874,24 +839,15 @@ class TradingBotGUI(tk.Tk):
             self.after(100, self.update_logs)
         else:
             self.start_button.config(state="normal")
-            self.sweep_button.config(state="normal")
             self.stop_button.config(state="disabled")
             self.log_message("\n[INFO] Engine process terminated.\n", "INFO")
             
-            # Auto-refresh saved models in case a new model was trained or updated
-            self.refresh_saved_models()
-
-            if self.sweep_symbol:
-                sym = self.sweep_symbol
-                self.sweep_symbol = None
-                self.after(200, lambda: self.show_sweep_selection(sym))
-            else:
-                # After backtest completes, render equity curve and load replay data
-                self.notebook.select(self.tab_console)
-                self.after(200, self.plot_equity_curve)
-                sym = self.var_symbols.get().split(",")[0].strip()
-                tf  = self.var_timeframe.get()
-                self.after(400, lambda: self.load_replay_data(sym, tf))
+            # After backtest completes, render equity curve and load replay data
+            self.notebook.select(self.tab_console)
+            self.after(200, self.plot_equity_curve)
+            sym = self.var_symbols.get().split(",")[0].strip()
+            tf  = self.var_timeframe.get()
+            self.after(400, lambda: self.load_replay_data(sym, tf))
 
     def stop_bot(self):
         self.stop_event.set()
@@ -907,155 +863,238 @@ class TradingBotGUI(tk.Tk):
         self.log_area.config(state="disabled")
         self.log_area.see(tk.END)
 
-    def show_sweep_selection(self, symbol):
-        """Show a styled top-10 sweep result selection dialog."""
-        top10_path = os.path.join(BACKTEST_SUMMARY_DIR, f"sweep_top10_{symbol}.json")
-        if not os.path.exists(top10_path):
-            self.log_message(f"[WARN] No sweep results file found for {symbol}.\n", "WARN")
-            return
 
-        with open(top10_path, "r") as fh:
-            top10 = json.load(fh)
-
-        if not top10:
-            self.log_message("[WARN] Sweep produced no results to select from.\n", "WARN")
-            return
-
-        dlg = tk.Toplevel(self)
-        dlg.title(f"Select Configuration to Save — {symbol}")
-        dlg.configure(bg=self.colors["bg"])
-        dlg.geometry("760x460")
-        dlg.resizable(False, False)
-        dlg.grab_set()
-
-        # Header
-        hdr = tk.Label(
-            dlg, text=f"HYPER-SWEEP TOP-10 RESULTS  ·  {symbol}",
-            bg=self.colors["bg"], fg=self.colors["accent"],
-            font=("Segoe UI", 11, "bold")
-        )
-        hdr.pack(anchor="w", padx=20, pady=(16, 6))
-
-        sub = tk.Label(
-            dlg, text="Select a configuration and click SAVE to apply it to the MLPattern strategy.",
-            bg=self.colors["bg"], fg=self.colors["text_muted"],
-            font=("Segoe UI", 9)
-        )
-        sub.pack(anchor="w", padx=20, pady=(0, 12))
-
-        # Column headers
-        cols_frame = tk.Frame(dlg, bg="#1A1A1A")
-        cols_frame.pack(fill="x", padx=20)
-        for col, w in [("Rank", 5), ("RR", 10), ("Threshold", 12), ("Trades", 9), ("Wins", 7), ("Losses", 8), ("Win Rate", 10), ("Net Profit", 12)]:
-            tk.Label(
-                cols_frame, text=col,
-                bg="#1A1A1A", fg=self.colors["accent"],
-                font=("Segoe UI", 8, "bold"), width=w, anchor="w"
-            ).pack(side="left", padx=3, pady=6)
-
-        # Listbox
-        lb_frame = tk.Frame(dlg, bg=self.colors["bg"])
-        lb_frame.pack(fill="both", expand=True, padx=20, pady=(2, 0))
-
-        scrollbar = tk.Scrollbar(lb_frame, orient="vertical")
-        scrollbar.pack(side="right", fill="y")
-
-        lb = tk.Listbox(
-            lb_frame,
-            yscrollcommand=scrollbar.set,
-            bg="#1E1E1E",
-            fg=self.colors["text"],
-            selectbackground=self.colors["accent"],
-            selectforeground="#FFFFFF",
-            activestyle="none",
-            font=("Consolas", 9),
-            bd=0,
-            highlightthickness=0,
-            relief="flat",
-        )
-        lb.pack(side="left", fill="both", expand=True)
-        scrollbar.config(command=lb.yview)
-
-        # Get currently applied configuration for comparison
-        from currency.settings import load_settings
-        try:
-            all_settings = load_settings()
-            sym_settings = all_settings.get(symbol, {})
-            current_rr = sym_settings.get("best_rr")
-            current_thr = sym_settings.get("best_threshold")
-        except Exception:
-            current_rr, current_thr = None, None
-
-        for i, r in enumerate(top10):
-            profit_sign = "+" if r["NetProfit"] >= 0 else ""
-            
-            # Check if this row is the currently applied configuration
-            is_applied = False
-            if current_rr is not None and current_thr is not None:
-                is_applied = (abs(r["RR"] - current_rr) < 1e-4 and abs(r["Threshold"] - current_thr) < 1e-4)
-
-            applied_tag = "  [CURRENTLY APPLIED]" if is_applied else ""
-
-            row_text = (
-                f"  #{i+1:<4}  "
-                f"RR {r['RR']:.1f}:1{'':<6}"
-                f"Thr {r['Threshold']*100:.0f}%{'':<6}"
-                f"Trades {int(r['Trades']):<6}"
-                f"W {int(r['Wins']):<5}"
-                f"L {int(r['Losses']):<5}"
-                f"WR {r['WinRate']:.1f}%{'':<5}"
-                f"Profit {profit_sign}${r['NetProfit']:,.2f}{applied_tag}"
-            )
-            lb.insert(tk.END, row_text)
-            if is_applied:
-                # Highlight in accent/cyan color
-                lb.itemconfig(i, fg=self.colors["accent"])
-            elif i == 0:
-                lb.itemconfig(i, fg=self.colors["success"])
-
-        lb.select_set(0)
-
-        # Status label
-        status_lbl = tk.Label(
-            dlg, text="",
-            bg=self.colors["bg"], fg=self.colors["success"],
-            font=("Segoe UI", 9, "bold")
-        )
-        status_lbl.pack(pady=(8, 0))
-
-        # Buttons
-        btn_frame = tk.Frame(dlg, bg=self.colors["bg"])
-        btn_frame.pack(pady=(4, 16))
-
-        def on_save():
-            sel = lb.curselection()
-            if not sel:
-                status_lbl.config(text="Select a row first.", fg=self.colors["warning"])
-                return
-            chosen = top10[sel[0]]
-            from currency.find_best_pattern import save_sweep_result
-            ok, msg = save_sweep_result(symbol, chosen)
-            if ok:
-                status_lbl.config(
-                    text=f"✓ Saved  {msg}  for {symbol}  —  switch Strategy to MLPattern and run.",
-                    fg=self.colors["success"]
-                )
-                save_btn.config(state="disabled")
-                self.log_message(
-                    f"[INFO] Sweep config saved for {symbol}: {msg}\n", "INFO"
-                )
-                self.refresh_saved_models()
-            else:
-                status_lbl.config(text=f"✗ Save failed: {msg}", fg=self.colors["danger"])
-
-        save_btn = ttk.Button(btn_frame, text="SAVE SELECTED CONFIG", command=on_save, style="Action.TButton")
-        save_btn.pack(side="left", padx=(0, 10), ipadx=10)
-
-        ttk.Button(btn_frame, text="CLOSE", command=dlg.destroy, style="Stop.TButton").pack(side="left", ipadx=10)
 
     # ─────────────────────────────────────────────────────────────────────────
     # LIVE REPLAY  —  TradingView Lightweight Charts (browser-based)
     # ─────────────────────────────────────────────────────────────────────────
+
+    def _build_optimizer_tab(self):
+        self.tab_optimizer.grid_columnconfigure(0, weight=1)
+        self.tab_optimizer.grid_rowconfigure(2, weight=1)
+
+        # Row 0: controls card
+        ctrl_card = ttk.Frame(self.tab_optimizer, style="Card.TFrame")
+        ctrl_card.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
+        for c in [1, 3, 5, 7]:
+            ctrl_card.columnconfigure(c, weight=1)
+
+        lbl = tk.Label(ctrl_card, text="PARAMETER OPTIMIZATION (Bayesian)",
+                       bg=self.colors["card_bg"], fg=self.colors["accent"],
+                       font=("Segoe UI", 10, "bold"))
+        lbl.grid(row=0, column=0, columnspan=8, sticky="w", padx=12, pady=(8, 4))
+
+        from currency.settings import load_settings
+        opt_settings = load_settings()
+        opt_symbols = sorted(opt_settings.keys()) if opt_settings else ["EURUSD", "GBPUSD"]
+
+        OPT_STRATEGIES = ["All", "Noir", "BreakerBlock", "DoubleTop", "TripleTop"]
+
+        row = 1
+        tk.Label(ctrl_card, text="Symbol:", bg=self.colors["card_bg"],
+                 fg=self.colors["text"], font=("Segoe UI", 9))\
+            .grid(row=row, column=0, sticky="w", padx=12, pady=3)
+        self.opt_symbol = ttk.Combobox(ctrl_card, values=opt_symbols, state="readonly", width=24)
+        self.opt_symbol.set(opt_symbols[0] if opt_symbols else "EURUSD")
+        self.opt_symbol.grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=3)
+
+        tk.Label(ctrl_card, text="Timeframe:", bg=self.colors["card_bg"],
+                 fg=self.colors["text"], font=("Segoe UI", 9))\
+            .grid(row=row, column=2, sticky="w", padx=8, pady=3)
+        self.opt_tf = ttk.Combobox(ctrl_card, values=["M1","M5","M10","M15","M30","H1","H4","D1"],
+                                   state="readonly", width=6)
+        self.opt_tf.set("M10")
+        self.opt_tf.grid(row=row, column=3, sticky="ew", padx=(0, 8), pady=3)
+
+        tk.Label(ctrl_card, text="Strategy:", bg=self.colors["card_bg"],
+                 fg=self.colors["text"], font=("Segoe UI", 9))\
+            .grid(row=row, column=4, sticky="w", padx=8, pady=3)
+        self.opt_strategy = ttk.Combobox(ctrl_card, values=OPT_STRATEGIES,
+                                         state="readonly", width=14)
+        self.opt_strategy.set("All")
+        self.opt_strategy.grid(row=row, column=5, sticky="ew", padx=(0, 8), pady=3)
+
+        tk.Label(ctrl_card, text="Iterations:", bg=self.colors["card_bg"],
+                 fg=self.colors["text"], font=("Segoe UI", 9))\
+            .grid(row=row, column=6, sticky="w", padx=8, pady=3)
+        self.opt_iters = tk.Entry(ctrl_card, bg="#2A2A2A", fg=self.colors["text"],
+                                  insertbackground=self.colors["text"], bd=0, relief="flat",
+                                  highlightthickness=1, highlightbackground="#3A3A3A",
+                                  highlightcolor=self.colors["accent"], font=("Segoe UI", 9), width=6)
+        self.opt_iters.insert(0, "60")
+        self.opt_iters.grid(row=row, column=7, sticky="ew", padx=(0, 12), pady=3)
+
+        row += 1
+        tk.Label(ctrl_card, text="Start Date:", bg=self.colors["card_bg"],
+                 fg=self.colors["text"], font=("Segoe UI", 9))\
+            .grid(row=row, column=0, sticky="w", padx=12, pady=3)
+        six_months_ago = (datetime.now() - timedelta(days=180)).strftime("%Y-%m-%d")
+        self.opt_start = tk.Entry(ctrl_card, bg="#2A2A2A", fg=self.colors["text"],
+                                  insertbackground=self.colors["text"], bd=0, relief="flat",
+                                  highlightthickness=1, highlightbackground="#3A3A3A",
+                                  highlightcolor=self.colors["accent"], font=("Segoe UI", 9))
+        self.opt_start.insert(0, six_months_ago)
+        self.opt_start.grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=3)
+
+        tk.Label(ctrl_card, text="End Date:", bg=self.colors["card_bg"],
+                 fg=self.colors["text"], font=("Segoe UI", 9))\
+            .grid(row=row, column=2, sticky="w", padx=8, pady=3)
+        self.opt_end = tk.Entry(ctrl_card, bg="#2A2A2A", fg=self.colors["text"],
+                                insertbackground=self.colors["text"], bd=0, relief="flat",
+                                highlightthickness=1, highlightbackground="#3A3A3A",
+                                highlightcolor=self.colors["accent"], font=("Segoe UI", 9))
+        self.opt_end.insert(0, datetime.now().strftime("%Y-%m-%d"))
+        self.opt_end.grid(row=row, column=3, sticky="ew", padx=(0, 8), pady=3)
+
+        tk.Label(ctrl_card, text="RR:", bg=self.colors["card_bg"],
+                 fg=self.colors["text"], font=("Segoe UI", 9))\
+            .grid(row=row, column=4, sticky="w", padx=8, pady=3)
+        self.opt_rr = tk.Entry(ctrl_card, bg="#2A2A2A", fg=self.colors["text"],
+                               insertbackground=self.colors["text"], bd=0, relief="flat",
+                               highlightthickness=1, highlightbackground="#3A3A3A",
+                               highlightcolor=self.colors["accent"], font=("Segoe UI", 9), width=6)
+        self.opt_rr.insert(0, "5.0")
+        self.opt_rr.grid(row=row, column=5, sticky="ew", padx=(0, 8), pady=3)
+
+        tk.Label(ctrl_card, text="", bg=self.colors["card_bg"],
+                 font=("Segoe UI", 9))\
+            .grid(row=row, column=6, columnspan=2, sticky="w", padx=8, pady=3)
+
+        row += 1
+        btn_frame = tk.Frame(ctrl_card, bg=self.colors["card_bg"])
+        btn_frame.grid(row=row, column=0, columnspan=8, sticky="ew", padx=12, pady=(4, 10))
+
+        for label, delta in [("Last 3 Months", 90), ("Last 6 Months", 180), ("Last Year", 365)]:
+            b = tk.Button(btn_frame, text=label,
+                          command=lambda d=delta: self._opt_set_date_range(d),
+                          bg="#2C2C2C", fg="#CCCCCC", activebackground=self.colors["accent"],
+                          activeforeground="#121212", bd=0, relief="flat",
+                          font=("Segoe UI", 8, "bold"), padx=10, pady=3, cursor="hand2")
+            b.pack(side="left", padx=(0, 8))
+
+        self.opt_start_btn = ttk.Button(btn_frame, text="START OPTIMIZATION",
+                                        command=self._start_param_optimizer, style="Action.TButton")
+        self.opt_start_btn.pack(side="right")
+
+        # Row 1: live results summary
+        summary_card = ttk.Frame(self.tab_optimizer, style="Card.TFrame")
+        summary_card.grid(row=1, column=0, sticky="ew", padx=10, pady=4)
+        summary_card.grid_columnconfigure(1, weight=1)
+
+        tk.Label(summary_card, text="BEST RESULT", bg=self.colors["card_bg"],
+                 fg=self.colors["success"], font=("Segoe UI", 10, "bold"))\
+            .grid(row=0, column=0, columnspan=4, sticky="w", padx=12, pady=(8, 4))
+
+        self.opt_best_label = tk.Label(summary_card, text="Not yet run",
+                                       bg=self.colors["card_bg"],
+                                       fg=self.colors["text_muted"],
+                                       font=("Segoe UI", 9))
+        self.opt_best_label.grid(row=1, column=0, columnspan=4, sticky="w", padx=12, pady=(0, 10))
+
+        # Row 2: progress log
+        log_card = ttk.Frame(self.tab_optimizer, style="Card.TFrame")
+        log_card.grid(row=2, column=0, sticky="nsew", padx=10, pady=(4, 10))
+        log_card.grid_columnconfigure(0, weight=1)
+        log_card.grid_rowconfigure(1, weight=1)
+
+        tk.Label(log_card, text="OPTIMIZATION LOG", bg=self.colors["card_bg"],
+                 fg=self.colors["accent"], font=("Segoe UI", 10, "bold"))\
+            .grid(row=0, column=0, sticky="w", padx=12, pady=(8, 4))
+
+        self.opt_log = scrolledtext.ScrolledText(
+            log_card, wrap=tk.WORD, bg="#0B0B0B", fg="#00FF66",
+            insertbackground="#EEEEEE", font=("Consolas", 9), bd=0,
+            highlightthickness=0
+        )
+        self.opt_log.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 10))
+
+    def _opt_set_date_range(self, days_back):
+        start = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+        end = datetime.now().strftime("%Y-%m-%d")
+        self.opt_start.delete(0, tk.END)
+        self.opt_start.insert(0, start)
+        self.opt_end.delete(0, tk.END)
+        self.opt_end.insert(0, end)
+
+    def _start_param_optimizer(self):
+        self.opt_start_btn.config(state="disabled")
+        self.opt_log.delete("1.0", tk.END)
+        self.opt_best_label.config(text="Running...", fg=self.colors["text_muted"])
+
+        self.optimizer_stream = StringIO()
+        self.optimizer_thread = threading.Thread(target=self._run_param_optimizer, daemon=True)
+        self.optimizer_thread.start()
+        self.after(100, self._update_optimizer_log)
+
+    def _run_param_optimizer(self):
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        try:
+            sys.stdout = self.optimizer_stream
+            sys.stderr = self.optimizer_stream
+
+            from currency.modules.param_optimizer import optimize as run_optimize
+
+            symbol = self.opt_symbol.get()
+            tf = self.opt_tf.get()
+            strategy_sel = self.opt_strategy.get()
+            start_str = self.opt_start.get().strip()
+            end_str = self.opt_end.get().strip()
+            iters = int(self.opt_iters.get().strip())
+            rr = float(self.opt_rr.get().strip())
+
+            strategies = None if strategy_sel == "All" else [strategy_sel]
+
+            def progress(msg):
+                self.optimizer_stream.write(msg + "\n")
+                self.optimizer_stream.flush()
+
+            best, history = run_optimize(
+                symbol, timeframe=tf,
+                start_str=start_str, end_str=end_str,
+                n_iterations=iters, n_initial=min(20, iters // 2),
+                rr=rr, strategies=strategies,
+                progress_callback=progress,
+            )
+
+            if best:
+                self.optimizer_stream.write(
+                    f"\n[RESULT] Best: P={best['polyorder']} W={best['window_length']} "
+                    f"O={best['order']} S={best['strategy']}  "
+                    f"profit={best['profit']}  wr={best['win_rate']}\n"
+                )
+                self.after(0, self._update_best_label, best)
+            else:
+                self.optimizer_stream.write("\n[ERROR] Optimization failed.\n")
+
+        except Exception as e:
+            self.optimizer_stream.write(f"\n[ERROR] Optimization exception: {e}\n")
+            import traceback
+            traceback.print_exc(file=self.optimizer_stream)
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+
+    def _update_best_label(self, best):
+        text = (f"P={best['polyorder']}  W={best['window_length']}  O={best['order']}  "
+                f"Strategy={best['strategy']}  |  profit={best['profit']}  "
+                f"trades={best['total_trades']}  wr={best['win_rate']}  "
+                f"pf={best['profit_factor']}")
+        self.opt_best_label.config(text=text, fg=self.colors["success"])
+
+    def _update_optimizer_log(self):
+        if self.optimizer_stream:
+            contents = self.optimizer_stream.getvalue()
+            if contents:
+                self.opt_log.insert(tk.END, contents)
+                self.opt_log.see(tk.END)
+                self.optimizer_stream.seek(0)
+                self.optimizer_stream.truncate(0)
+
+        if self.optimizer_thread and self.optimizer_thread.is_alive():
+            self.after(100, self._update_optimizer_log)
+        else:
+            self.opt_start_btn.config(state="normal")
 
     def _build_replay_tab(self):
         self.tab_replay.grid_columnconfigure(0, weight=1)
@@ -1990,498 +2029,7 @@ updMetrics();
             self.log_message(f"[ERROR] Failed to export share file: {exc}\n", "WARN")
 
     # ─────────────────────────────────────────────────────────────────────────
-    # ML TRAINING TAB
-    # ─────────────────────────────────────────────────────────────────────────
 
-    ML_SYMBOLS = [
-        "Volatility 25 Index", "Volatility 10 Index", "Volatility 15 Index",
-        "Volatility 100 Index", "EURUSD", "GBPUSD", "USDJPY", "GBPJPY", "AUDUSD",
-    ]
-
-    def _build_ml_train_tab(self):
-        self.tab_ml_train.grid_columnconfigure(0, weight=1)
-        self.tab_ml_train.grid_rowconfigure(2, weight=1)
-
-        # ── Row 0: Parameters card ──────────────────────────────────────────
-        params_card = ttk.Frame(self.tab_ml_train, style="Card.TFrame")
-        params_card.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
-        params_card.columnconfigure(1, weight=1)
-
-        lbl = tk.Label(params_card, text="TRAINING PARAMETERS",
-                       bg=self.colors["card_bg"], fg=self.colors["accent"],
-                       font=("Segoe UI", 10, "bold"))
-        lbl.grid(row=0, column=0, columnspan=4, sticky="w", padx=12, pady=(8, 4))
-
-        row = 1
-        tk.Label(params_card, text="Symbol:", bg=self.colors["card_bg"],
-                 fg=self.colors["text"], font=("Segoe UI", 9))\
-            .grid(row=row, column=0, sticky="w", padx=12, pady=3)
-        self.ml_symbol = ttk.Combobox(params_card, values=self.ML_SYMBOLS, state="readonly", width=22)
-        self.ml_symbol.set("Volatility 25 Index")
-        self.ml_symbol.grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=3)
-
-        tk.Label(params_card, text="Timeframe:", bg=self.colors["card_bg"],
-                 fg=self.colors["text"], font=("Segoe UI", 9))\
-            .grid(row=row, column=2, sticky="w", padx=8, pady=3)
-        self.ml_tf = ttk.Combobox(params_card, values=["M1","M5","M10","M15","M30","H1","H4","D1"],
-                                  state="readonly", width=6)
-        self.ml_tf.set("M10")
-        self.ml_tf.grid(row=row, column=3, sticky="ew", padx=(0, 12), pady=3)
-
-        row += 1
-        tk.Label(params_card, text="Start Date:", bg=self.colors["card_bg"],
-                 fg=self.colors["text"], font=("Segoe UI", 9))\
-            .grid(row=row, column=0, sticky="w", padx=12, pady=3)
-        three_months_ago = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
-        self.ml_start = tk.Entry(params_card, bg="#2A2A2A", fg=self.colors["text"],
-                                 insertbackground=self.colors["text"], bd=0, relief="flat",
-                                 highlightthickness=1, highlightbackground="#3A3A3A",
-                                 highlightcolor=self.colors["accent"], font=("Segoe UI", 9))
-        self.ml_start.insert(0, three_months_ago)
-        self.ml_start.grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=3)
-
-        tk.Label(params_card, text="End Date:", bg=self.colors["card_bg"],
-                 fg=self.colors["text"], font=("Segoe UI", 9))\
-            .grid(row=row, column=2, sticky="w", padx=8, pady=3)
-        self.ml_end = tk.Entry(params_card, bg="#2A2A2A", fg=self.colors["text"],
-                               insertbackground=self.colors["text"], bd=0, relief="flat",
-                               highlightthickness=1, highlightbackground="#3A3A3A",
-                               highlightcolor=self.colors["accent"], font=("Segoe UI", 9))
-        self.ml_end.insert(0, datetime.now().strftime("%Y-%m-%d"))
-        self.ml_end.grid(row=row, column=3, sticky="ew", padx=(0, 12), pady=3)
-
-        row += 1
-        tk.Label(params_card, text="RR:", bg=self.colors["card_bg"],
-                 fg=self.colors["text"], font=("Segoe UI", 9))\
-            .grid(row=row, column=0, sticky="w", padx=12, pady=3)
-        self.ml_rr = tk.Entry(params_card, bg="#2A2A2A", fg=self.colors["text"],
-                              insertbackground=self.colors["text"], bd=0, relief="flat",
-                              highlightthickness=1, highlightbackground="#3A3A3A",
-                              highlightcolor=self.colors["accent"], font=("Segoe UI", 9), width=8)
-        self.ml_rr.insert(0, "5.0")
-        self.ml_rr.grid(row=row, column=1, sticky="w", padx=(0, 8), pady=3)
-
-        tk.Label(params_card, text="Test Size:", bg=self.colors["card_bg"],
-                 fg=self.colors["text"], font=("Segoe UI", 9))\
-            .grid(row=row, column=2, sticky="w", padx=8, pady=3)
-        self.ml_test_size = tk.Entry(params_card, bg="#2A2A2A", fg=self.colors["text"],
-                                     insertbackground=self.colors["text"], bd=0, relief="flat",
-                                     highlightthickness=1, highlightbackground="#3A3A3A",
-                                     highlightcolor=self.colors["accent"], font=("Segoe UI", 9), width=8)
-        self.ml_test_size.insert(0, "0.2")
-        self.ml_test_size.grid(row=row, column=3, sticky="w", padx=(0, 12), pady=3)
-
-        row += 1
-        btn_frame = tk.Frame(params_card, bg=self.colors["card_bg"])
-        btn_frame.grid(row=row, column=0, columnspan=4, sticky="ew", padx=12, pady=(4, 10))
-
-        for label, delta in [("Last 3 Months", 90), ("Last 6 Months", 180), ("Last Year", 365)]:
-            b = tk.Button(btn_frame, text=label,
-                          command=lambda d=delta: self._ml_set_date_range(d),
-                          bg="#2C2C2C", fg="#CCCCCC", activebackground=self.colors["accent"],
-                          activeforeground="#121212", bd=0, relief="flat",
-                          font=("Segoe UI", 8, "bold"), padx=10, pady=3, cursor="hand2")
-            b.pack(side="left", padx=(0, 8))
-
-        self.ml_train_btn = ttk.Button(btn_frame, text="TRAIN MODEL",
-                                       command=self.start_ml_training, style="Action.TButton")
-        self.ml_train_btn.pack(side="right")
-
-        # ── Row 1: Train log ────────────────────────────────────────────────
-        log_card = ttk.Frame(self.tab_ml_train, style="Card.TFrame")
-        log_card.grid(row=1, column=0, sticky="ew", padx=10, pady=4)
-        log_card.grid_columnconfigure(0, weight=1)
-
-        tk.Label(log_card, text="TRAINING LOG", bg=self.colors["card_bg"],
-                 fg=self.colors["accent"], font=("Segoe UI", 10, "bold"))\
-            .pack(anchor="w", padx=12, pady=(8, 4))
-
-        self.ml_log = scrolledtext.ScrolledText(
-            log_card, wrap=tk.WORD, bg="#0B0B0B", fg="#00FF66",
-            insertbackground="#EEEEEE", font=("Consolas", 9), bd=0,
-            highlightthickness=0, height=10
-        )
-        self.ml_log.pack(fill="both", expand=True, padx=12, pady=(0, 10))
-
-        # ── Row 2: Saved models ─────────────────────────────────────────────
-        models_card = ttk.Frame(self.tab_ml_train, style="Card.TFrame")
-        models_card.grid(row=2, column=0, sticky="nsew", padx=10, pady=(4, 10))
-        models_card.grid_columnconfigure(0, weight=1)
-        models_card.grid_rowconfigure(1, weight=1)
-
-        hdr_frame = tk.Frame(models_card, bg=self.colors["card_bg"])
-        hdr_frame.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 4))
-        hdr_frame.columnconfigure(1, weight=1)
-
-        tk.Label(hdr_frame, text="SAVED MODELS", bg=self.colors["card_bg"],
-                 fg=self.colors["accent"], font=("Segoe UI", 10, "bold"))\
-            .grid(row=0, column=0, sticky="w")
-
-        self.ml_refresh_btn = tk.Button(hdr_frame, text="REFRESH",
-                                        command=self.refresh_saved_models,
-                                        bg="#2C2C2C", fg="#CCCCCC", activebackground=self.colors["accent"],
-                                        activeforeground="#121212", bd=0, relief="flat",
-                                        font=("Segoe UI", 8, "bold"), padx=8, pady=2, cursor="hand2")
-        self.ml_refresh_btn.grid(row=0, column=1, sticky="e")
-
-        list_frame = tk.Frame(models_card, bg=self.colors["card_bg"])
-        list_frame.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 4))
-        list_frame.grid_columnconfigure(0, weight=1)
-        list_frame.grid_rowconfigure(0, weight=1)
-
-        self.ml_models_listbox = tk.Listbox(
-            list_frame, bg="#1E1E1E", fg=self.colors["text"],
-            selectbackground=self.colors["accent"], selectforeground="#FFFFFF",
-            activestyle="none", font=("Consolas", 9), bd=0, highlightthickness=0, relief="flat"
-        )
-        self.ml_models_listbox.grid(row=0, column=0, sticky="nsew")
-
-        scroll_m = tk.Scrollbar(list_frame, orient="vertical", command=self.ml_models_listbox.yview)
-        scroll_m.grid(row=0, column=1, sticky="ns")
-        self.ml_models_listbox.config(yscrollcommand=scroll_m.set)
-
-        scroll_mx = tk.Scrollbar(list_frame, orient="horizontal", command=self.ml_models_listbox.xview)
-        scroll_mx.grid(row=1, column=0, sticky="ew")
-        self.ml_models_listbox.config(xscrollcommand=scroll_mx.set)
-
-        apply_frame = tk.Frame(models_card, bg=self.colors["card_bg"])
-        apply_frame.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 10))
-
-        tk.Label(apply_frame, text="Threshold:", bg=self.colors["card_bg"],
-                 fg=self.colors["text"], font=("Segoe UI", 9))\
-            .grid(row=0, column=0, sticky="w", padx=(0, 6))
-        self.ml_threshold = tk.Entry(apply_frame, bg="#2A2A2A", fg=self.colors["text"],
-                                     insertbackground=self.colors["text"], bd=0, relief="flat",
-                                     highlightthickness=1, highlightbackground="#3A3A3A",
-                                     highlightcolor=self.colors["accent"], font=("Segoe UI", 9), width=8)
-        self.ml_threshold.insert(0, "0.58")
-        self.ml_threshold.grid(row=0, column=1, sticky="w", padx=(0, 12))
-
-        tk.Label(apply_frame, text="RR:", bg=self.colors["card_bg"],
-                 fg=self.colors["text"], font=("Segoe UI", 9))\
-            .grid(row=0, column=2, sticky="w", padx=(0, 6))
-        self.ml_apply_rr = tk.Entry(apply_frame, bg="#2A2A2A", fg=self.colors["text"],
-                                   insertbackground=self.colors["text"], bd=0, relief="flat",
-                                   highlightthickness=1, highlightbackground="#3A3A3A",
-                                   highlightcolor=self.colors["accent"], font=("Segoe UI", 9), width=8)
-        self.ml_apply_rr.insert(0, "5.0")
-        self.ml_apply_rr.grid(row=0, column=3, sticky="w", padx=(0, 12))
-
-        # Column 4 takes empty space so buttons stay on the right
-        apply_frame.columnconfigure(4, weight=1)
-
-        self.ml_delete_btn = ttk.Button(apply_frame, text="DELETE MODEL",
-                                        command=self.delete_selected_model, style="Stop.TButton")
-        self.ml_delete_btn.grid(row=0, column=5, sticky="e", padx=(0, 6))
-
-        self.ml_apply_btn = ttk.Button(apply_frame, text="APPLY CONFIG TO SYMBOL",
-                                       command=self.apply_model_config, style="Action.TButton")
-        self.ml_apply_btn.grid(row=0, column=6, sticky="e")
-
-        self.ml_status_lbl = tk.Label(apply_frame, text="", bg=self.colors["card_bg"],
-                                      fg=self.colors["success"], font=("Segoe UI", 9))
-        self.ml_status_lbl.grid(row=0, column=7, sticky="w", padx=(10, 0))
-
-        # Bind model list selection event to auto-populate fields
-        self.ml_models_listbox.bind("<<ListboxSelect>>", self.on_ml_model_selected)
-
-        # Populate saved models on init
-        self.after(500, self.refresh_saved_models)
-
-    def _ml_set_date_range(self, days_back):
-        start = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
-        end = datetime.now().strftime("%Y-%m-%d")
-        self.ml_start.delete(0, tk.END)
-        self.ml_start.insert(0, start)
-        self.ml_end.delete(0, tk.END)
-        self.ml_end.insert(0, end)
-
-    def start_ml_training(self):
-        self.ml_train_btn.config(state="disabled")
-        self.ml_log.delete("1.0", tk.END)
-        self.ml_log.insert(tk.END, "[INFO] Starting ML training...\n")
-        self.ml_log.see(tk.END)
-
-        self.ml_stream = StringIO()
-        self.ml_thread = threading.Thread(target=self._run_ml_training, daemon=True)
-        self.ml_thread.start()
-        self.after(100, self._update_ml_log)
-
-    def _run_ml_training(self):
-        old_stdout = sys.stdout
-        old_stderr = sys.stderr
-        try:
-            sys.stdout = self.ml_stream
-            sys.stderr = self.ml_stream
-
-            symbol = self.ml_symbol.get()
-            tf_name = self.ml_tf.get()
-            start_str = self.ml_start.get().strip()
-            end_str = self.ml_end.get().strip()
-            rr = float(self.ml_rr.get().strip())
-            test_size = float(self.ml_test_size.get().strip())
-
-            start_dt = datetime.strptime(start_str, "%Y-%m-%d")
-            end_dt = datetime.strptime(end_str, "%Y-%m-%d")
-
-            from currency.unified_trading import (
-                initialize_mt5, shutdown_mt5, get_historical_data,
-                prep_data, clean_data, detect_pivot_points
-            )
-            from currency.modules.ml_pattern import build_and_train_model
-
-            tf_map = {
-                "M1": 1, "M5": 5, "M10": 10, "M15": 15, "M30": 30,
-                "H1": 60, "H4": 240, "D1": 1440,
-            }
-            import MetaTrader5 as mt5
-            mt5_tf_map = {
-                "M1": mt5.TIMEFRAME_M1, "M5": mt5.TIMEFRAME_M5, "M10": mt5.TIMEFRAME_M10,
-                "M15": mt5.TIMEFRAME_M15, "M30": mt5.TIMEFRAME_M30,
-                "H1": mt5.TIMEFRAME_H1, "H4": mt5.TIMEFRAME_H4, "D1": mt5.TIMEFRAME_D1,
-            }
-
-            print(f"[INFO] Initializing MT5...")
-            if not initialize_mt5():
-                print("[ERROR] MT5 initialization failed.")
-                return
-
-            print(f"[INFO] Fetching {symbol} {tf_name} data from {start_str} to {end_str}...")
-            ok = get_historical_data(symbol, mt5_tf_map[tf_name], tf_name, start_dt, end_dt)
-            if not ok:
-                print(f"[ERROR] Failed to fetch historical data for {symbol}.")
-                shutdown_mt5()
-                return
-
-            df = prep_data(symbol, tf_name)
-            print(f"[INFO] Loaded {len(df)} candles.")
-            clean_data(df, symbol, timeframe=tf_name)
-            detect_pivot_points(df, symbol, timeframe=tf_name)
-
-            pivot_count = df["Is_High"].notna().sum() + df["Is_Low"].notna().sum()
-            print(f"[INFO] Detected {pivot_count} pivot points.")
-
-            result = build_and_train_model(df, symbol, RR=rr, test_size=test_size, timeframe=tf_name)
-            if result.get("success"):
-                print(f"\n[DONE] Model trained and saved for {symbol}.")
-                print(f"       Test accuracy: {result['test_metrics']['accuracy']:.4f}")
-                print(f"       Test precision: {result['test_metrics']['precision']:.4f}")
-                print(f"       Test F1: {result['test_metrics']['f1']:.4f}")
-                print(f"       Cutoff date: {result['cutoff']}")
-            else:
-                print(f"\n[ERROR] Training failed: {result.get('reason', 'unknown')}")
-
-            shutdown_mt5()
-
-        except Exception as e:
-            print(f"\n[ERROR] ML training exception: {e}")
-        finally:
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
-
-    def _update_ml_log(self):
-        contents = self.ml_stream.getvalue()
-        if contents:
-            self.ml_log.insert(tk.END, contents)
-            self.ml_log.see(tk.END)
-            self.ml_stream.seek(0)
-            self.ml_stream.truncate(0)
-
-        if hasattr(self, 'ml_thread') and self.ml_thread and self.ml_thread.is_alive():
-            self.after(100, self._update_ml_log)
-        else:
-            self.ml_train_btn.config(state="normal")
-            self.refresh_saved_models()
-            self.ml_log.insert(tk.END, "\n[INFO] Training finished.\n")
-            self.ml_log.see(tk.END)
-
-    def refresh_saved_models(self):
-        from currency.modules.ml_pattern import list_saved_models
-        from currency.settings import load_settings
-        
-        try:
-            all_settings = load_settings()
-        except Exception:
-            all_settings = {}
-
-        self.ml_models_listbox.delete(0, tk.END)
-        self._ml_models_data = []  # map listbox index → symbol name
-        models = list_saved_models()
-        if not models:
-            self.ml_models_listbox.insert(tk.END, "  No saved models found.")
-            self.ml_models_listbox.itemconfig(0, fg=self.colors["text_muted"])
-            return
-        for m in sorted(models, key=lambda x: x["symbol"]):
-            self._ml_models_data.append(m["symbol"])
-            meta = m["meta"]
-            
-            # Load active/applied settings from settings.json
-            sym_settings = all_settings.get(m["symbol"], {})
-            applied_rr = sym_settings.get("best_rr")
-            applied_thr = sym_settings.get("best_threshold")
-
-            app_str = ""
-            if applied_rr is not None or applied_thr is not None:
-                app_parts = []
-                if applied_rr is not None:
-                    app_parts.append(f"applied_rr={applied_rr:.1f}")
-                if applied_thr is not None:
-                    app_parts.append(f"applied_thr={applied_thr*100:.0f}%")
-                app_str = " | APPLIED: " + " ".join(app_parts)
-
-            if meta:
-                cutoff = meta.get("train_cutoff", "?")
-                n_train = meta.get("n_train", "?")
-                n_test = meta.get("n_test", "?")
-                
-                start = meta.get("train_start")
-                if start and len(start) >= 10:
-                    start_str = start[:10]
-                else:
-                    start_str = start if start else "?"
-                
-                if cutoff and len(cutoff) >= 10:
-                    cutoff_str = cutoff[:10]
-                else:
-                    cutoff_str = cutoff if cutoff else "?"
-
-                # Retrieve new fields gracefully
-                test_size = meta.get("test_size")
-                rr = meta.get("rr")
-                accuracy = meta.get("accuracy")
-                precision = meta.get("precision")
-                
-                # Format them nicely
-                ts_str = f"test_size={test_size:.2f}" if isinstance(test_size, (int, float)) else f"test_size={test_size}"
-                rr_str = f"rr={rr:.1f}" if isinstance(rr, (int, float)) else f"rr={rr}"
-                acc_str = f"acc={accuracy*100:.1f}%" if isinstance(accuracy, (int, float)) else ""
-                prec_str = f"prec={precision*100:.1f}%" if isinstance(precision, (int, float)) else ""
-                
-                extra_str = f"  {ts_str}  {rr_str}"
-                if acc_str:
-                    extra_str += f"  {acc_str}"
-                if prec_str:
-                    extra_str += f"  {prec_str}"
-                    
-                line = f"  {m['symbol']:<24} start={start_str}  cutoff={cutoff_str}  train={n_train:<5} test={n_test:<5}{extra_str}{app_str}"
-            else:
-                line = f"  {m['symbol']:<24}  (no metadata){app_str}"
-            self.ml_models_listbox.insert(tk.END, line)
-
-    def on_ml_model_selected(self, event):
-        sel = self.ml_models_listbox.curselection()
-        if not sel:
-            return
-        idx = sel[0]
-        if not hasattr(self, '_ml_models_data') or idx >= len(self._ml_models_data):
-            return
-        symbol = self._ml_models_data[idx]
-        
-        # Load from settings.json first
-        from currency.settings import load_settings
-        try:
-            settings = load_settings()
-            sym_settings = settings.get(symbol, {})
-            best_rr = sym_settings.get("best_rr")
-            best_threshold = sym_settings.get("best_threshold")
-        except Exception:
-            best_rr, best_threshold = None, None
-
-        # Fallback to model metadata if not set in settings.json
-        if best_rr is None or best_threshold is None:
-            from currency.modules.ml_pattern import _load_training_metadata
-            try:
-                meta = _load_training_metadata(symbol)
-                if meta:
-                    if best_rr is None:
-                        best_rr = meta.get("rr")
-            except Exception:
-                pass
-
-        if best_rr is None:
-            best_rr = 5.0
-        if best_threshold is None:
-            best_threshold = 0.58
-
-        self.ml_threshold.delete(0, tk.END)
-        self.ml_threshold.insert(0, f"{best_threshold:.2f}")
-
-        self.ml_apply_rr.delete(0, tk.END)
-        self.ml_apply_rr.insert(0, f"{best_rr:.1f}")
-
-    def apply_model_config(self):
-        sel = self.ml_models_listbox.curselection()
-        if not sel:
-            self.ml_status_lbl.config(text="Select a model first.", fg=self.colors["warning"])
-            return
-        idx = sel[0]
-        if not hasattr(self, '_ml_models_data') or idx >= len(self._ml_models_data):
-            self.ml_status_lbl.config(text="Invalid selection.", fg=self.colors["danger"])
-            return
-        symbol = self._ml_models_data[idx]
-        try:
-            threshold = float(self.ml_threshold.get().strip())
-            rr = float(self.ml_apply_rr.get().strip())
-        except ValueError:
-            self.ml_status_lbl.config(text="Invalid RR or threshold.", fg=self.colors["danger"])
-            return
-
-        from currency.find_best_pattern import save_sweep_result
-        ok, msg = save_sweep_result(symbol, {"RR": rr, "Threshold": threshold})
-        if ok:
-            self.ml_status_lbl.config(
-                text=f"✓ Applied RR={rr:.1f} Thr={threshold:.2f} to {symbol}",
-                fg=self.colors["success"]
-            )
-            self.log_message(f"[INFO] ML config applied: {symbol} — RR={rr:.1f} Threshold={threshold:.2f}\n", "INFO")
-            self.refresh_saved_models()
-        else:
-            self.ml_status_lbl.config(text=f"✗ {msg}", fg=self.colors["danger"])
-
-    def delete_selected_model(self):
-        sel = self.ml_models_listbox.curselection()
-        if not sel:
-            self.ml_status_lbl.config(text="Select a model first.", fg=self.colors["warning"])
-            return
-        idx = sel[0]
-        if not hasattr(self, '_ml_models_data') or idx >= len(self._ml_models_data):
-            self.ml_status_lbl.config(text="Invalid selection.", fg=self.colors["danger"])
-            return
-        symbol = self._ml_models_data[idx]
-        
-        from tkinter import messagebox
-        confirm = messagebox.askyesno(
-            "Confirm Model Deletion",
-            f"Are you sure you want to permanently delete the machine learning model and metadata for {symbol}?\nThis action cannot be undone.",
-            parent=self
-        )
-        if not confirm:
-            return
-
-        from currency.modules.ml_pattern import MODEL_DIR, _loaded_models
-        
-        deleted_count = 0
-        for filename in [f"{symbol}_pattern_model.joblib", f"{symbol}_pattern_meta.json"]:
-            path = os.path.join(MODEL_DIR, filename)
-            if os.path.exists(path):
-                try:
-                    os.remove(path)
-                    deleted_count += 1
-                except Exception as e:
-                    self.log_message(f"[ERROR] Failed to delete file {filename}: {e}\n", "ERROR")
-
-        # Clear cache in memory
-        model_path = os.path.join(MODEL_DIR, f"{symbol}_pattern_model.joblib")
-        if model_path in _loaded_models:
-            del _loaded_models[model_path]
-
-        self.refresh_saved_models()
-        
-        if deleted_count > 0:
-            self.ml_status_lbl.config(text=f"✓ Deleted model for {symbol}", fg=self.colors["success"])
-            self.log_message(f"[INFO] Deleted ML model files for {symbol}\n", "INFO")
-        else:
-            self.ml_status_lbl.config(text="No files were found to delete.", fg=self.colors["warning"])
 
 
 if __name__ == "__main__":

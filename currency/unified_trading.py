@@ -530,14 +530,6 @@ def analyze_symbol(symbol, live_trading=False, config=None):
     detect_pivot_points(df, symbol, timeframe=timeframe_name)
 
     for strategy_name in strategies:
-        if strategy_name == "MLPattern":
-            from .modules.ml_pattern import build_and_train_model, MODEL_DIR
-            model_filename = f"{symbol}_{timeframe_name}_pattern_model.joblib" if timeframe_name else f"{symbol}_pattern_model.joblib"
-            model_path = os.path.join(MODEL_DIR, model_filename)
-            if not os.path.exists(model_path):
-                print(f"[INFO] Saved model for {symbol}_{timeframe_name} not found. Building and training ML model first...")
-                build_and_train_model(df, symbol, RR=config.get("rr", 5.0), timeframe=timeframe_name)
-        
         strategy = Strategy(df, symbol=symbol, timeframe=timeframe_name)
         rr = config.get("rr", 5.0)
         plot_df = getattr(strategy, strategy_name)(RR=rr)

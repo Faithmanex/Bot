@@ -10,6 +10,11 @@ def get_path(relative_path):
     """Returns the absolute path for a given relative path from the project root."""
     return os.path.join(get_project_root(), relative_path)
 
+def save_settings(settings, settings_file="settings.json"):
+    settings_path = get_path(f'currency/{settings_file}')
+    with open(settings_path, "w") as file:
+        json.dump(settings, file, indent=4)
+
 def load_settings(settings_file="settings.json"):
     """Loads settings from a JSON file, applying default values for missing symbols."""
     settings_path = get_path(f'currency/{settings_file}')

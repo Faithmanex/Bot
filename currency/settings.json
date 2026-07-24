@@ -1,61 +1,67 @@
 {
-    "temporal_guard": false,
     "EURUSD": {
         "polyorder": 8,
         "window_length": 15,
-        "order": 3,
-        "best_rr": 3.0,
-        "best_threshold": 0.5
+        "order": 3
     },
     "GBPUSD": {
         "polyorder": 6,
         "window_length": 7,
-        "order": 5,
-        "best_rr": 5.0,
-        "best_threshold": 0.58
+        "order": 5
+    },
+    "Volatility 75 (1s) Index": {
+        "polyorder": 6,
+        "window_length": 12,
+        "order": 10
     },
     "Volatility 10 Index": {
-        "best_rr": 5.0,
-        "best_threshold": 0.58
+        "polyorder": 3,
+        "window_length": 7,
+        "order": 3
     },
-    "Volatility 15 Index": {
-        "best_rr": 6.0,
-        "best_threshold": 0.5
+    "Volatility 50 (1s) Index": {
+        "polyorder": 4,
+        "window_length": 8,
+        "order": 8
+    },
+    "Drift Switch Index 30": {
+        "polyorder": 5,
+        "window_length": 10,
+        "order": 9
     },
     "Volatility 100 Index": {
-        "best_rr": 3.0,
-        "best_threshold": 0.5
+        "polyorder": 11,
+        "window_length": 18,
+        "order": 4
     },
-    "Volatility": {
-        "best_rr": 5.0,
-        "best_threshold": 0.58
+    "Volatility 25 (1s) Index": {
+        "polyorder": 8,
+        "window_length": 15,
+        "order": 9
     },
-    "GBPUSD_M5": {
-        "best_rr": 5.0,
-        "best_threshold": 0.58
+    "Crash 300 Index": {
+        "polyorder": 8,
+        "window_length": 15,
+        "order": 9
     },
-    "GBPUSD_M15": {
-        "best_rr": 5.0,
-        "best_threshold": 0.58
+    "Jump 10 Index": {
+        "polyorder": 8,
+        "window_length": 15,
+        "order": 9
     },
-    "Volatility 25 Index_M15": {
-        "best_rr": 5.0,
-        "best_threshold": 0.58
+    "DEX 600 DOWN Index": {
+        "polyorder": 8,
+        "window_length": 15,
+        "order": 9
     },
-    "Volatility 25 Index_M5": {
-        "best_rr": 5.0,
-        "best_threshold": 0.58
+    "Volatility 200 (1s) Index": {
+        "polyorder": 4,
+        "window_length": 13,
+        "order": 3
     },
-    "EURUSD_M10": {
-        "best_rr": 5.0,
-        "best_threshold": 0.58
-    },
-    "Volatility 100 Index_M5": {
-        "best_rr": 5.0,
-        "best_threshold": 0.5
-    },
-    "Volatility 100 Index_M10": {
-        "best_rr": 4.0,
-        "best_threshold": 0.58
+    "Drift Switch Index 20": {
+        "polyorder": 4,
+        "window_length": 8,
+        "order": 7
     }
 }
