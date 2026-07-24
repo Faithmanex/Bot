@@ -5,17 +5,197 @@ import pandas as pd
 from datetime import datetime, timedelta
 from scipy.signal import savgol_filter, argrelextrema
 from scipy.stats import qmc
-import warnings
+import json
 import MetaTrader5 as mt5
 
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern, WhiteKernel, ConstantKernel
 
-from .strategy import Strategy
+from .strategy import Strategy as OrigStrategy
 from ..settings import load_settings, save_settings, get_path, HISTORY_DATA_DIR, OPT_HISTORY_PATH
+
+STRATEGY_PARAM_DEFAULTS = {
+    "Noir": {"min_swing_low_ratio": 1.1, "max_swing_low_ratio": 3.0,
+             "min_swing_high_ratio": 1.2, "max_swing_high_ratio": 3.0, "sl_mult": 1.1},
+    "BreakerBlock": {"min_range_ratio": 2.0, "sl_fib": 0.272},
+    "DoubleTop": {"min_range_ratio": 2.0, "sl_fib": 0.272, "tolerance": 0.02},
+    "TripleTop": {"min_range_ratio": 2.0, "sl_fib": 0.272},
+}
+
+STRATEGY_PARAM_BOUNDS = {
+    "Noir": {"min_swing_low_ratio": (1.0, 2.0), "max_swing_low_ratio": (2.0, 5.0),
+             "min_swing_high_ratio": (1.0, 2.5), "max_swing_high_ratio": (2.0, 5.0), "sl_mult": (1.0, 2.5)},
+    "BreakerBlock": {"min_range_ratio": (1.0, 4.0), "sl_fib": (0.1, 0.6)},
+    "DoubleTop": {"min_range_ratio": (1.0, 4.0), "sl_fib": (0.1, 0.6), "tolerance": (0.005, 0.05)},
+    "TripleTop": {"min_range_ratio": (1.0, 4.0), "sl_fib": (0.1, 0.6)},
+}
+
+class ParameterizedStrategy(OrigStrategy):
+    def __init__(self, dataframe, params=None):
+        super().__init__(dataframe)
+        if params is None:
+            params = {}
+        self._sp = {**STRATEGY_PARAM_DEFAULTS.get("Noir", {}), **params}
+
+    def configure(self, strategy_name, params):
+        merged = STRATEGY_PARAM_DEFAULTS.get(strategy_name, {}).copy()
+        merged.update(params)
+        self._sp = merged
+
+    def Noir(self, RR):
+        sp = self._sp
+        min_sl = sp["min_swing_low_ratio"]
+        max_sl = sp["max_swing_low_ratio"]
+        min_sh = sp["min_swing_high_ratio"]
+        max_sh = sp["max_swing_high_ratio"]
+        slm = sp["sl_mult"]
+        conditions = (
+            self.new_df['low_shift_0'].notna() &
+            self.new_df['low_shift_2'].notna() &
+            self.new_df['low_shift_4'].notna() &
+            self.new_df['high_shift_1'].notna() &
+            self.new_df['high_shift_3'].notna() &
+            self.new_df['high_shift_5'].notna() &
+            (self.new_df['low_shift_0'] < self.new_df['low_shift_2']) &
+            (self.new_df['low_shift_4'] > self.new_df['low_shift_2']) &
+            (self.new_df['high_shift_1'] < self.new_df['high_shift_3']) &
+            ((self.new_df['low_shift_2'] - self.new_df['low_shift_0']) > (min_sl * (self.new_df['high_shift_1'] - self.new_df['low_shift_2']))) &
+            ((self.new_df['low_shift_2'] - self.new_df['low_shift_0']) < (max_sl * (self.new_df['high_shift_1'] - self.new_df['low_shift_2']))) &
+            ((self.new_df['high_shift_3'] - self.new_df['low_shift_2']) > (min_sh * (self.new_df['high_shift_3'] - self.new_df['low_shift_4']))) &
+            ((self.new_df['high_shift_3'] - self.new_df['low_shift_2']) < (max_sh * (self.new_df['high_shift_3'] - self.new_df['low_shift_4'])))
+        )
+        new_df_filtered = self.new_df[conditions]
+        occurences, entries, stop_losses, take_profits = [], [], [], []
+        if not new_df_filtered.empty:
+            occurences = new_df_filtered.index.tolist()
+            block_range = new_df_filtered['high_shift_3'] - new_df_filtered['low_shift_4']
+            entry_price = new_df_filtered['high_shift_5']
+            stop_loss = new_df_filtered['high_shift_5'] + (block_range * slm)
+            take_profit = entry_price - ((stop_loss - entry_price) * RR)
+            entries = entry_price.tolist()
+            stop_losses = stop_loss.tolist()
+            take_profits = take_profit.tolist()
+        plot_df = pd.DataFrame({"Occurence": occurences, "Entry": entries,
+                                "Stop_Loss": stop_losses, "Take_Profit": take_profits})
+        plot_df["Risk_to_Reward_Ratio"] = (plot_df["Take_Profit"] - plot_df["Entry"]) / (
+            plot_df["Entry"] - plot_df["Stop_Loss"])
+        return plot_df
+
+    def BreakerBlock(self, RR):
+        sp = self._sp
+        min_range = sp["min_range_ratio"]
+        sl_fib = sp["sl_fib"]
+        conditions = (
+            self.new_df['low_shift_0'].notna() &
+            self.new_df['low_shift_2'].notna() &
+            self.new_df['low_shift_4'].notna() &
+            self.new_df['high_shift_1'].notna() &
+            self.new_df['high_shift_3'].notna() &
+            (self.new_df['low_shift_0'] < self.new_df['high_shift_1']) &
+            (self.new_df['low_shift_2'] < self.new_df['high_shift_1']) &
+            (self.new_df['high_shift_3'] > self.new_df['low_shift_2']) &
+            (self.new_df['low_shift_0'] < self.new_df['low_shift_2']) &
+            (self.new_df['high_shift_3'] < self.new_df['high_shift_1']) &
+            (self.new_df['low_shift_4'] < self.new_df['low_shift_2']) &
+            ((self.new_df['high_shift_1'] - self.new_df['low_shift_0']) > (min_range * (self.new_df['high_shift_1'] - self.new_df['low_shift_2'])))
+        )
+        new_df_filtered = self.new_df[conditions]
+        occurences, entries, stop_losses, take_profits = [], [], [], []
+        if not new_df_filtered.empty:
+            occurences = new_df_filtered.index.tolist()
+            block_range = new_df_filtered['high_shift_3'] - new_df_filtered['low_shift_2']
+            entry_price = new_df_filtered['low_shift_2']
+            stop_loss = new_df_filtered['high_shift_1'] + (block_range * sl_fib)
+            take_profit = entry_price - ((stop_loss - entry_price) * RR)
+            entries = entry_price.tolist()
+            stop_losses = stop_loss.tolist()
+            take_profits = take_profit.tolist()
+        plot_df = pd.DataFrame({"Occurence": occurences, "Entry": entries,
+                                "Stop_Loss": stop_losses, "Take_Profit": take_profits})
+        plot_df["Risk_to_Reward_Ratio"] = (plot_df["Take_Profit"] - plot_df["Entry"]) / (
+            plot_df["Entry"] - plot_df["Stop_Loss"])
+        return plot_df
+
+    def DoubleTop(self, RR):
+        sp = self._sp
+        min_range = sp["min_range_ratio"]
+        sl_fib = sp["sl_fib"]
+        tol = sp["tolerance"]
+        conditions = (
+            self.new_df['low_shift_0'].notna() &
+            self.new_df['low_shift_2'].notna() &
+            self.new_df['low_shift_4'].notna() &
+            self.new_df['high_shift_1'].notna() &
+            self.new_df['high_shift_3'].notna() &
+            (self.new_df['low_shift_0'] < self.new_df['high_shift_1']) &
+            (self.new_df['low_shift_2'] < self.new_df['high_shift_1']) &
+            (self.new_df['high_shift_3'] > self.new_df['low_shift_2']) &
+            (self.new_df['low_shift_0'] < self.new_df['low_shift_2']) &
+            (self.new_df['high_shift_3'] < self.new_df['high_shift_1']) &
+            (self.new_df['low_shift_4'] < self.new_df['low_shift_2']) &
+            ((self.new_df['high_shift_1'] - self.new_df['low_shift_0']) > (min_range * (self.new_df['high_shift_1'] - self.new_df['low_shift_2'])))
+        )
+        new_df_filtered = self.new_df[conditions]
+        occurences, entries, stop_losses, take_profits = [], [], [], []
+        if not new_df_filtered.empty:
+            lower_tolerance = new_df_filtered['high_shift_3'] - (new_df_filtered['low_shift_2'] * np.tan(tol))
+            upper_tolerance = new_df_filtered['high_shift_3'] + (new_df_filtered['low_shift_2'] * np.tan(tol))
+            mask = (upper_tolerance >= new_df_filtered['high_shift_1']) & (new_df_filtered['high_shift_1'] >= lower_tolerance)
+            valid_df = new_df_filtered[mask]
+            if not valid_df.empty:
+                occurences = valid_df.index.tolist()
+                block_range = valid_df['high_shift_3'] - valid_df['low_shift_2']
+                entry_price = valid_df['low_shift_2'] - block_range
+                stop_loss = valid_df['high_shift_1'] + (block_range * sl_fib)
+                take_profit = entry_price - ((stop_loss - entry_price) * RR)
+                entries = entry_price.tolist()
+                stop_losses = stop_loss.tolist()
+                take_profits = take_profit.tolist()
+        plot_df = pd.DataFrame({"Occurence": occurences, "Entry": entries,
+                                "Stop_Loss": stop_losses, "Take_Profit": take_profits})
+        plot_df["Risk_to_Reward_Ratio"] = (plot_df["Take_Profit"] - plot_df["Entry"]) / (
+            plot_df["Entry"] - plot_df["Stop_Loss"])
+        return plot_df
+
+    def TripleTop(self, RR):
+        sp = self._sp
+        min_range = sp["min_range_ratio"]
+        sl_fib = sp["sl_fib"]
+        conditions = (
+            self.new_df['low_shift_0'].notna() &
+            self.new_df['low_shift_2'].notna() &
+            self.new_df['low_shift_4'].notna() &
+            self.new_df['high_shift_1'].notna() &
+            self.new_df['high_shift_3'].notna() &
+            (self.new_df['low_shift_0'] < self.new_df['high_shift_1']) &
+            (self.new_df['low_shift_2'] < self.new_df['high_shift_1']) &
+            (self.new_df['high_shift_3'] > self.new_df['low_shift_2']) &
+            (self.new_df['low_shift_0'] < self.new_df['low_shift_2']) &
+            (self.new_df['high_shift_3'] < self.new_df['high_shift_1']) &
+            (self.new_df['low_shift_4'] < self.new_df['low_shift_2']) &
+            ((self.new_df['high_shift_1'] - self.new_df['low_shift_0']) > (min_range * (self.new_df['high_shift_1'] - self.new_df['low_shift_2'])))
+        )
+        new_df_filtered = self.new_df[conditions]
+        occurences, entries, stop_losses, take_profits = [], [], [], []
+        if not new_df_filtered.empty:
+            occurences = new_df_filtered.index.tolist()
+            block_range = new_df_filtered['high_shift_3'] - new_df_filtered['low_shift_2']
+            entry_price = new_df_filtered['low_shift_2'] - block_range
+            stop_loss = new_df_filtered['high_shift_1'] + (block_range * sl_fib)
+            take_profit = entry_price - ((stop_loss - entry_price) * RR)
+            entries = entry_price.tolist()
+            stop_losses = stop_loss.tolist()
+            take_profits = take_profit.tolist()
+        plot_df = pd.DataFrame({"Occurence": occurences, "Entry": entries,
+                                "Stop_Loss": stop_losses, "Take_Profit": take_profits})
+        plot_df["Risk_to_Reward_Ratio"] = (plot_df["Take_Profit"] - plot_df["Entry"]) / (
+            plot_df["Entry"] - plot_df["Stop_Loss"])
+        return plot_df
 
 STRATEGIES = ["Noir", "BreakerBlock", "DoubleTop", "TripleTop"]
 STRAT_IDX = {s: i for i, s in enumerate(STRATEGIES)}
+STRATEGY_PARAM_KEYS = {s: list(STRATEGY_PARAM_BOUNDS[s].keys()) for s in STRATEGIES}
+STRATEGY_PARAM_NDIMS = {s: len(STRATEGY_PARAM_KEYS[s]) for s in STRATEGIES}
 
 POLY_MIN, POLY_MAX = 2, 14
 WIN_MIN, WIN_MAX = 3, 19
@@ -150,10 +330,13 @@ def _run_backtest(df, plot_df, rr, initial_balance, risk_amount,
     return pd.DataFrame(results), wins, losses, neither
 
 
-def _base_result(polyorder, window_length, order, strategy_name):
+def _base_result(polyorder, window_length, order, strategy_name, strategy_params=None):
+    if strategy_params is None:
+        strategy_params = {}
     return {
         "polyorder": polyorder, "window_length": window_length,
         "order": order, "strategy": strategy_name,
+        "strategy_params": strategy_params.copy(),
         "wins": 0, "losses": 0, "neither": 0,
         "total_trades": 0, "final_balance": 0, "profit": 0,
         "win_rate": 0.0, "profit_factor": 0.0,
@@ -162,12 +345,16 @@ def _base_result(polyorder, window_length, order, strategy_name):
 
 def _evaluate(df, point_size, min_stop_dist, spread_arr,
               polyorder, window_length, order, strategy_name,
-              rr, risk_amount, initial_balance, min_trades):
-    br = _base_result(polyorder, window_length, order, strategy_name)
+              rr, risk_amount, initial_balance, min_trades,
+              strategy_params=None):
+    if strategy_params is None:
+        strategy_params = {}
+    br = _base_result(polyorder, window_length, order, strategy_name, strategy_params)
 
     _clean_and_detect(df, polyorder, window_length, order)
 
-    strategy = Strategy(df)
+    strategy = ParameterizedStrategy(df)
+    strategy.configure(strategy_name, strategy_params)
     plot_df = getattr(strategy, strategy_name)(RR=rr)
     if plot_df.empty:
         return -1.0, {**br, "error": "no trade signals"}
@@ -202,41 +389,80 @@ def _evaluate(df, point_size, min_stop_dist, spread_arr,
     return score, details
 
 
-def _encode_params(polyorder, window_length, order, strategy_name, strategies=None):
+def _strat_ndims(strategies):
+    if len(strategies) == 1:
+        return 3 + STRATEGY_PARAM_NDIMS[strategies[0]]
+    return 4
+
+
+def _strat_param_keys(strategies):
+    if len(strategies) == 1:
+        return STRATEGY_PARAM_KEYS[strategies[0]]
+    return []
+
+
+def _param_defaults_from_norm(strategies, x_norm):
+    if len(strategies) == 1:
+        s = strategies[0]
+        keys = STRATEGY_PARAM_KEYS[s]
+        bounds = STRATEGY_PARAM_BOUNDS[s]
+        return {k: x_norm[3 + i] * (bounds[k][1] - bounds[k][0]) + bounds[k][0]
+                for i, k in enumerate(keys)}
+    return {}
+
+
+def _encode_params(polyorder, window_length, order, strategy_name_or_params,
+                   strategies=None, strategy_params=None):
     if strategies is None:
         strategies = STRATEGIES
-    n_strat = len(strategies)
-    idx = strategies.index(strategy_name) if strategy_name in strategies else 0
-    return np.array([
-        (polyorder - POLY_MIN) / (POLY_MAX - POLY_MIN),
-        (window_length - WIN_MIN) / (WIN_MAX - WIN_MIN),
-        (order - ORDER_MIN) / (ORDER_MAX - ORDER_MIN),
-        idx / (n_strat - 1) if n_strat > 1 else 0.5,
-    ])
+    dims = _strat_ndims(strategies)
+    arr = np.zeros(dims)
+    arr[0] = (polyorder - POLY_MIN) / (POLY_MAX - POLY_MIN)
+    arr[1] = (window_length - WIN_MIN) / (WIN_MAX - WIN_MIN)
+    arr[2] = (order - ORDER_MIN) / (ORDER_MAX - ORDER_MIN)
+    if len(strategies) == 1:
+        s = strategies[0]
+        if strategy_params is None:
+            strategy_params = {}
+        bounds = STRATEGY_PARAM_BOUNDS[s]
+        keys = STRATEGY_PARAM_KEYS[s]
+        for i, k in enumerate(keys):
+            val = strategy_params.get(k, STRATEGY_PARAM_DEFAULTS[s][k])
+            arr[3 + i] = (val - bounds[k][0]) / (bounds[k][1] - bounds[k][0])
+    else:
+        n_strat = len(strategies)
+        idx = strategies.index(strategy_name_or_params) if strategy_name_or_params in strategies else 0
+        arr[3] = idx / (n_strat - 1) if n_strat > 1 else 0.5
+    return arr
 
 
 def _decode_params(x_norm, strategies=None):
     if strategies is None:
         strategies = STRATEGIES
-    n_strat = len(strategies)
     polyorder = int(round(x_norm[0] * (POLY_MAX - POLY_MIN) + POLY_MIN))
     window_length = int(round(x_norm[1] * (WIN_MAX - WIN_MIN) + WIN_MIN))
     order = int(round(x_norm[2] * (ORDER_MAX - ORDER_MIN) + ORDER_MIN))
+    if len(strategies) == 1:
+        s = strategies[0]
+        strategy_params = _param_defaults_from_norm(strategies, x_norm)
+        return polyorder, window_length, order, s, strategy_params
+    n_strat = len(strategies)
     strat_idx = int(round(x_norm[3] * (n_strat - 1))) if n_strat > 1 else 0
     strategy_name = strategies[min(strat_idx, n_strat - 1)]
-    return polyorder, window_length, order, strategy_name
+    return polyorder, window_length, order, strategy_name, {}
 
 
 def _sobol_samples(n, strategies=None, seed=42):
+    dims = _strat_ndims(strategies)
     pow2 = 2 ** int(np.floor(np.log2(n)))
-    sampler = qmc.Sobol(d=4, seed=seed)
+    sampler = qmc.Sobol(d=dims, seed=seed)
     all_samples = []
     if pow2 >= 2:
         all_samples.extend(sampler.random(pow2))
     remaining = n - len(all_samples)
     if remaining > 0:
         rng = np.random.RandomState(seed + 1)
-        all_samples.extend(rng.uniform(size=(remaining, 4)))
+        all_samples.extend(rng.uniform(size=(remaining, dims)))
     return [_decode_params(s, strategies) for s in all_samples]
 
 
@@ -244,16 +470,25 @@ def _random_candidates(n, rng, strategies=None):
     if strategies is None:
         strategies = STRATEGIES
     candidates = []
+    keys = _strat_param_keys(strategies)
+    bounds_dict = STRATEGY_PARAM_BOUNDS.get(strategies[0], {}) if len(strategies) == 1 else {}
     for _ in range(n):
         polyorder = rng.randint(POLY_MIN, POLY_MAX + 1)
         window_length = rng.randint(WIN_MIN, WIN_MAX + 1)
         order = rng.randint(ORDER_MIN, ORDER_MAX + 1)
-        strategy_name = rng.choice(strategies)
         window_length = max(window_length, polyorder + 2)
         if window_length % 2 == 0:
             window_length += 1
         window_length = min(window_length, WIN_MAX)
-        candidates.append((polyorder, window_length, order, strategy_name))
+        strategy_params = {}
+        for k in keys:
+            lo, hi = bounds_dict[k]
+            strategy_params[k] = rng.uniform(lo, hi)
+        if len(strategies) == 1:
+            candidates.append((polyorder, window_length, order, strategies[0], strategy_params))
+        else:
+            strategy_name = rng.choice(strategies)
+            candidates.append((polyorder, window_length, order, strategy_name, strategy_params))
     return candidates
 
 
@@ -322,7 +557,7 @@ def optimize(symbol, timeframe="M10", start_str=None, end_str=None,
 
         for step in range(n_iterations):
             if step < n_init:
-                polyorder, window_length, order, strategy_name = initial_params[step]
+                polyorder, window_length, order, strategy_name, strategy_params = initial_params[step]
             else:
                 X_arr = np.array(X)
                 y_arr = np.array(scores)
@@ -338,7 +573,9 @@ def optimize(symbol, timeframe="M10", start_str=None, end_str=None,
                 surrogate.fit(X_arr, y_arr)
 
                 candidates = _random_candidates(500, rng, strat_list)
-                X_candidates = np.array([_encode_params(*c, strat_list) for c in candidates])
+                X_candidates = np.array([_encode_params(*c[:3], c[3], strat_list,
+                                        strategy_params=c[4] if len(c) > 4 else None)
+                                        for c in candidates])
                 preds, stds = surrogate.predict(X_candidates, return_std=True)
                 y_best = y_arr.max()
 
@@ -351,7 +588,7 @@ def optimize(symbol, timeframe="M10", start_str=None, end_str=None,
                 best_idx = np.argmax(ei)
                 if ei.max() <= 0:
                     best_idx = np.argmax(stds)
-                polyorder, window_length, order, strategy_name = candidates[best_idx]
+                polyorder, window_length, order, strategy_name, strategy_params = candidates[best_idx]
 
             polyorder = np.clip(polyorder, POLY_MIN, POLY_MAX)
             order = np.clip(order, ORDER_MIN, ORDER_MAX)
@@ -366,15 +603,21 @@ def optimize(symbol, timeframe="M10", start_str=None, end_str=None,
                 df, point_size, min_stop_dist, spread_arr,
                 int(polyorder), int(window_length), int(order), strategy_name,
                 rr, risk_amount, initial_balance, min_trades,
+                strategy_params=strategy_params,
             )
 
-            X.append(_encode_params(int(polyorder), int(window_length), int(order), strategy_name, strat_list))
+            X.append(_encode_params(int(polyorder), int(window_length), int(order), strategy_name, strat_list,
+                                     strategy_params=strategy_params))
             scores.append(score)
             history.append(details)
 
+            sp_str = ""
+            if strategy_params:
+                sp_str = " " + " ".join(f"{k}={v:.3f}" for k, v in sorted(strategy_params.items()))
             status = "✓" if score > 0 else "✗"
             _report(f"[{status} {step+1}/{n_iterations}] P={polyorder} W={window_length} "
-                    f"O={order} S={strategy_name:<14} → profit={details.get('profit', 0):>8}  "
+                    f"O={order} S={strategy_name:<14}{sp_str} → "
+                    f"profit={details.get('profit', 0):>8}  "
                     f"trades={details.get('total_trades', 0):>3}  "
                     f"wr={details.get('win_rate', 0):>6}  "
                     f"score={score:.2f}")
@@ -386,6 +629,9 @@ def optimize(symbol, timeframe="M10", start_str=None, end_str=None,
         _report("═══════════════════════════════════════════")
         _report(f" BEST: P={best['polyorder']} W={best['window_length']} "
                 f"O={best['order']} S={best['strategy']}")
+        sp = best.get("strategy_params", {})
+        if sp:
+            _report(f"       strategy params: {' '.join(f'{k}={v:.3f}' for k,v in sorted(sp.items()))}")
         _report(f"       profit={best['profit']}  trades={best['total_trades']}  "
                 f"wr={best['win_rate']}  pf={best['profit_factor']}")
         _report("═══════════════════════════════════════════")
@@ -398,6 +644,8 @@ def optimize(symbol, timeframe="M10", start_str=None, end_str=None,
             settings[symbol]["window_length"] = int(best["window_length"])
             settings[symbol]["order"] = int(best["order"])
             settings[symbol]["best_strategy"] = best["strategy"]
+            if sp:
+                settings[symbol]["strategy_params"] = {k: round(v, 4) for k, v in sp.items()}
             _report(f"[DONE] Best strategy: {best['strategy']}")
         save_settings(settings)
 

@@ -1148,8 +1148,10 @@ class TradingBotGUI(tk.Tk):
         self.opt_last_best = best
         self.opt_last_symbol = self.opt_symbol.get()
         self.opt_last_tf = self.opt_tf.get()
+        sp = best.get("strategy_params", {})
+        sp_str = "  " + " ".join(f"{k}={v:.3f}" for k, v in sorted(sp.items())) if sp else ""
         text = (f"P={best['polyorder']}  W={best['window_length']}  O={best['order']}  "
-                f"Strategy={best['strategy']}  |  profit={best['profit']}  "
+                f"Strategy={best['strategy']}{sp_str}  |  profit={best['profit']}  "
                 f"trades={best['total_trades']}  wr={best['win_rate']}  "
                 f"pf={best['profit_factor']}")
         self.opt_best_label.config(text=text, fg=self.colors["success"])
@@ -1194,10 +1196,17 @@ class TradingBotGUI(tk.Tk):
         for r in records:
             self._opt_hist_data.append(r.get("id", ""))
             best = r.get("best", {})
+            sp = best.get("strategy_params", {})
+            sp_str = ""
+            if sp:
+                items = [f"{k}={v:.2f}" for k, v in sorted(sp.items())]
+                sp_str = " " + " ".join(items[:3])
+                if len(items) > 3:
+                    sp_str += "..."
             line = (f"  {r.get('timestamp','')[:16]}  {r.get('symbol',''):<22}  "
                     f"{r.get('timeframe',''):>4}  "
                     f"P={best.get('polyorder','?'):>2} W={best.get('window_length','?'):>2} "
-                    f"O={best.get('order','?'):>2}  S={best.get('strategy','?'):<14}  "
+                    f"O={best.get('order','?'):>2}  S={best.get('strategy','?'):<14}{sp_str}  "
                     f"profit={best.get('profit','?'):>7}")
             self.opt_hist_listbox.insert(tk.END, line)
 
