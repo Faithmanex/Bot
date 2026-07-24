@@ -410,7 +410,12 @@ def optimize(symbol, timeframe="M10", start_str=None, end_str=None,
 
 
 def _norm_cdf(x):
-    return 0.5 * (1.0 + np.erf(x / np.sqrt(2.0)))
+    return 0.5 * (1.0 + _erf(x / np.sqrt(2.0)))
+
+
+def _erf(x):
+    from scipy.special import erf
+    return erf(x)
 
 
 def _norm_pdf(x):
