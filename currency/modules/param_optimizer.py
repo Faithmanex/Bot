@@ -12,7 +12,7 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern, WhiteKernel, ConstantKernel
 
 from .strategy import Strategy
-from ..settings import load_settings, save_settings, get_path, HISTORY_DATA_DIR
+from ..settings import load_settings, save_settings, get_path, HISTORY_DATA_DIR, OPT_HISTORY_PATH
 
 STRATEGIES = ["Noir", "BreakerBlock", "DoubleTop", "TripleTop"]
 STRAT_IDX = {s: i for i, s in enumerate(STRATEGIES)}
@@ -401,12 +401,59 @@ def optimize(symbol, timeframe="M10", start_str=None, end_str=None,
             _report(f"[DONE] Best strategy: {best['strategy']}")
         save_settings(settings)
 
+        save_opt_history(symbol, timeframe, strat_list, n_iterations,
+                         start_str if start_str else str(start.date()),
+                         end_str if end_str else str(end.date()),
+                         best, history)
+        _report(f"[DONE] Optimization saved to history.")
+
         _report(f"[DONE] Best params saved to settings.json for {symbol}")
 
         return best, history
 
     finally:
         mt5.shutdown()
+
+
+def save_opt_history(symbol, timeframe, strategies, n_iterations,
+                     start_date, end_date, best, history):
+    os.makedirs(os.path.dirname(OPT_HISTORY_PATH), exist_ok=True)
+    records = load_opt_history()
+    entry = {
+        "id": datetime.now().strftime("%Y%m%d_%H%M%S"),
+        "timestamp": datetime.now().isoformat(),
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "strategies": strategies,
+        "n_iterations": n_iterations,
+        "start_date": start_date,
+        "end_date": end_date,
+        "best": best,
+    }
+    records.insert(0, entry)
+    max_records = 200
+    if len(records) > max_records:
+        records = records[:max_records]
+    with open(OPT_HISTORY_PATH, "w") as f:
+        json.dump(records, f, indent=2)
+
+
+def load_opt_history():
+    if os.path.exists(OPT_HISTORY_PATH):
+        try:
+            with open(OPT_HISTORY_PATH, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return []
+    return []
+
+
+def delete_opt_history(record_id):
+    records = load_opt_history()
+    records = [r for r in records if r.get("id") != record_id]
+    with open(OPT_HISTORY_PATH, "w") as f:
+        json.dump(records, f, indent=2)
+    return records
 
 
 def _norm_cdf(x):

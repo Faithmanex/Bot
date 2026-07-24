@@ -48,3 +48,4 @@ def load_settings(settings_file="settings.json"):
 HISTORY_DATA_DIR = get_path("history_data")
 BACKTEST_SUMMARY_DIR = get_path("backtest_summary")
 ORDER_DB = get_path("sent_limits.csv")
+OPT_HISTORY_PATH = get_path("currency/opt_history.json")

@@ -234,6 +234,9 @@ class TradingBotGUI(tk.Tk):
         # Optimizer thread state
         self.optimizer_thread = None
         self.optimizer_stream = None
+        self.opt_last_best = None
+        self.opt_last_symbol = None
+        self.opt_last_tf = None
 
         # Replay state — HTML file generated after each backtest
         self.replay_html_path = None
@@ -989,7 +992,13 @@ class TradingBotGUI(tk.Tk):
                                        bg=self.colors["card_bg"],
                                        fg=self.colors["text_muted"],
                                        font=("Segoe UI", 9))
-        self.opt_best_label.grid(row=1, column=0, columnspan=4, sticky="w", padx=12, pady=(0, 10))
+        self.opt_best_label.grid(row=1, column=0, columnspan=4, sticky="w", padx=12, pady=(0, 4))
+
+        self.opt_apply_btn = ttk.Button(summary_card, text="APPLY & BACKTEST",
+                                        command=self._opt_apply_and_backtest,
+                                        style="Action.TButton")
+        self.opt_apply_btn.grid(row=2, column=0, sticky="w", padx=12, pady=(0, 10))
+        self.opt_apply_btn.grid_remove()
 
         # Row 2: progress log
         log_card = ttk.Frame(self.tab_optimizer, style="Card.TFrame")
@@ -1008,6 +1017,64 @@ class TradingBotGUI(tk.Tk):
         )
         self.opt_log.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 10))
 
+        # Row 3: history
+        hist_card = ttk.Frame(self.tab_optimizer, style="Card.TFrame")
+        hist_card.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 10))
+        hist_card.grid_columnconfigure(0, weight=1)
+
+        hdr_frame = tk.Frame(hist_card, bg=self.colors["card_bg"])
+        hdr_frame.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 4))
+        hdr_frame.columnconfigure(1, weight=1)
+
+        tk.Label(hdr_frame, text="OPTIMIZATION HISTORY", bg=self.colors["card_bg"],
+                 fg=self.colors["accent"], font=("Segoe UI", 10, "bold"))\
+            .grid(row=0, column=0, sticky="w")
+
+        self.opt_hist_refresh = tk.Button(hdr_frame, text="REFRESH",
+                                          command=self._refresh_opt_history,
+                                          bg="#2C2C2C", fg="#CCCCCC",
+                                          activebackground=self.colors["accent"],
+                                          activeforeground="#121212", bd=0, relief="flat",
+                                          font=("Segoe UI", 8, "bold"), padx=8, pady=2, cursor="hand2")
+        self.opt_hist_refresh.grid(row=0, column=1, sticky="e")
+
+        list_frame = tk.Frame(hist_card, bg=self.colors["card_bg"])
+        list_frame.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 4))
+        list_frame.grid_columnconfigure(0, weight=1)
+
+        self.opt_hist_listbox = tk.Listbox(
+            list_frame, bg="#1E1E1E", fg=self.colors["text"],
+            selectbackground=self.colors["accent"], selectforeground="#FFFFFF",
+            activestyle="none", font=("Consolas", 8), bd=0, highlightthickness=0, relief="flat",
+            height=5
+        )
+        self.opt_hist_listbox.grid(row=0, column=0, sticky="ew")
+
+        scroll_h = tk.Scrollbar(list_frame, orient="vertical", command=self.opt_hist_listbox.yview)
+        scroll_h.grid(row=0, column=1, sticky="ns")
+        self.opt_hist_listbox.config(yscrollcommand=scroll_h.set)
+
+        btn_row = tk.Frame(hist_card, bg=self.colors["card_bg"])
+        btn_row.grid(row=2, column=0, sticky="ew", padx=12, pady=(4, 10))
+
+        self.opt_hist_load = tk.Button(btn_row, text="LOAD SELECTED",
+                                       command=self._opt_hist_load,
+                                       bg="#2C2C2C", fg="#CCCCCC",
+                                       activebackground=self.colors["accent"],
+                                       activeforeground="#121212", bd=0, relief="flat",
+                                       font=("Segoe UI", 8, "bold"), padx=10, pady=3, cursor="hand2")
+        self.opt_hist_load.pack(side="left", padx=(0, 8))
+
+        self.opt_hist_delete = tk.Button(btn_row, text="DELETE SELECTED",
+                                         command=self._opt_hist_delete,
+                                         bg="#3A1A1A", fg="#FF6B6B",
+                                         activebackground=self.colors["danger"],
+                                         activeforeground="#FFFFFF", bd=0, relief="flat",
+                                         font=("Segoe UI", 8, "bold"), padx=10, pady=3, cursor="hand2")
+        self.opt_hist_delete.pack(side="left")
+
+        self._refresh_opt_history()
+
     def _opt_set_date_range(self, days_back):
         start = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
         end = datetime.now().strftime("%Y-%m-%d")
@@ -1020,6 +1087,8 @@ class TradingBotGUI(tk.Tk):
         self.opt_start_btn.config(state="disabled")
         self.opt_log.delete("1.0", tk.END)
         self.opt_best_label.config(text="Running...", fg=self.colors["text_muted"])
+        self.opt_apply_btn.grid_remove()
+        self.opt_last_best = None
 
         self.optimizer_stream = StringIO()
         self.optimizer_thread = threading.Thread(target=self._run_param_optimizer, daemon=True)
@@ -1076,6 +1145,9 @@ class TradingBotGUI(tk.Tk):
             sys.stderr = old_stderr
 
     def _update_best_label(self, best):
+        self.opt_last_best = best
+        self.opt_last_symbol = self.opt_symbol.get()
+        self.opt_last_tf = self.opt_tf.get()
         text = (f"P={best['polyorder']}  W={best['window_length']}  O={best['order']}  "
                 f"Strategy={best['strategy']}  |  profit={best['profit']}  "
                 f"trades={best['total_trades']}  wr={best['win_rate']}  "
@@ -1095,6 +1167,71 @@ class TradingBotGUI(tk.Tk):
             self.after(100, self._update_optimizer_log)
         else:
             self.opt_start_btn.config(state="normal")
+            if self.opt_last_best:
+                self.opt_apply_btn.grid()
+            self._refresh_opt_history()
+
+    def _opt_apply_and_backtest(self):
+        if not self.opt_last_best:
+            return
+        best = self.opt_last_best
+        self.var_strategy.set(best["strategy"])
+        if self.opt_last_tf:
+            self.var_timeframe.set(self.opt_last_tf)
+        if self.opt_last_symbol:
+            self.var_symbols.set(self.opt_last_symbol)
+        self.notebook.select(self.tab_console)
+        self.start_bot()
+
+    def _refresh_opt_history(self):
+        from currency.modules.param_optimizer import load_opt_history
+        records = load_opt_history()
+        self.opt_hist_listbox.delete(0, tk.END)
+        self._opt_hist_data = []
+        if not records:
+            self.opt_hist_listbox.insert(tk.END, "  No past optimizations found.")
+            return
+        for r in records:
+            self._opt_hist_data.append(r.get("id", ""))
+            best = r.get("best", {})
+            line = (f"  {r.get('timestamp','')[:16]}  {r.get('symbol',''):<22}  "
+                    f"{r.get('timeframe',''):>4}  "
+                    f"P={best.get('polyorder','?'):>2} W={best.get('window_length','?'):>2} "
+                    f"O={best.get('order','?'):>2}  S={best.get('strategy','?'):<14}  "
+                    f"profit={best.get('profit','?'):>7}")
+            self.opt_hist_listbox.insert(tk.END, line)
+
+    def _opt_hist_load(self):
+        sel = self.opt_hist_listbox.curselection()
+        if not sel or not hasattr(self, '_opt_hist_data') or sel[0] >= len(self._opt_hist_data):
+            return
+        from currency.modules.param_optimizer import load_opt_history
+        records = load_opt_history()
+        rid = self._opt_hist_data[sel[0]]
+        for r in records:
+            if r.get("id") == rid:
+                self.opt_symbol.set(r.get("symbol", ""))
+                self.opt_tf.set(r.get("timeframe", "M10"))
+                self.opt_start.delete(0, tk.END)
+                self.opt_start.insert(0, r.get("start_date", ""))
+                self.opt_end.delete(0, tk.END)
+                self.opt_end.insert(0, r.get("end_date", ""))
+                best = r.get("best", {})
+                if best:
+                    self.opt_last_best = best
+                    self.opt_last_symbol = r.get("symbol")
+                    self.opt_last_tf = r.get("timeframe")
+                    self._update_best_label(best)
+                    self.opt_apply_btn.grid()
+                break
+
+    def _opt_hist_delete(self):
+        sel = self.opt_hist_listbox.curselection()
+        if not sel or not hasattr(self, '_opt_hist_data') or sel[0] >= len(self._opt_hist_data):
+            return
+        from currency.modules.param_optimizer import delete_opt_history
+        self._opt_hist_data = delete_opt_history(self._opt_hist_data[sel[0]])
+        self._refresh_opt_history()
 
     def _build_replay_tab(self):
         self.tab_replay.grid_columnconfigure(0, weight=1)
